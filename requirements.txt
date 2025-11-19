@@ -1,0 +1,12 @@
+torch
+numpy
+
+# Environment-specific dependencies
+#pybullet              # For BlocksWorld
+matplotlib            # For ShapeEnv
+shapely               # For ShapeEnv
+geopandas             # For ShapeEnv
+dill                  # For Switchboard rule serialization
+pygame
+# Notebooks
+jupyterlab
