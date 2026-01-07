@@ -2,6 +2,7 @@ import torch
 import time
 import sys
 import os
+import copy
 from typing import List, Dict, Optional, Any, Tuple, Callable
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
@@ -362,6 +363,35 @@ class Switchboard(RealTimeEnvironment):
 
         super().__init__(**kwargs)
 
+    def __copy__(self):
+        """
+        Creates a shallow copy. 
+        The new environment will reference the same rules and the same tensor object.
+        """
+        cls = self.__class__
+        result = cls.__new__(cls)
+        result.__dict__.update(self.__dict__)
+        return result
+
+    def __deepcopy__(self, memo):
+        """
+        Creates a deep copy.
+        Useful for 'imagination' or branching simulations.
+        """
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        
+        for k, v in self.__dict__.items():
+            # Special handling for PyTorch tensors to ensure gradients 
+            # and device placement are handled correctly during the deepcopy
+            if isinstance(v, torch.Tensor):
+                setattr(result, k, v.clone())
+            else:
+                setattr(result, k, copy.deepcopy(v, memo))
+                
+        return result
+
     def _get_initial_state(self) -> torch.Tensor:
         """Get initial observation state (all slots off)"""
         initial_obs = torch.zeros(self.obs_dim, device=self.device)
@@ -427,6 +457,10 @@ class Switchboard(RealTimeEnvironment):
                 for rule in self.rules
             ]
         }
+    
+    def set_obs(self, current_state):
+        """Set current environment state (for continous thinking)"""
+        self.current_observations = current_state
 
     def reset(self) -> torch.Tensor:
         """Reset environment and all rules"""

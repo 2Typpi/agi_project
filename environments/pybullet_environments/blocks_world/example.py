@@ -13,7 +13,7 @@ if __name__ == "__main__":
 
     # Create environment
 
-    env = BlocksWorld(gui=False, image_width=32, image_height=32, 
+    env = BlocksWorld(gui=True, image_width=128, image_height=128, 
                                    time_scaling=0, dt=1/120, reset_objects=True, reset_agent=True, randomize_object_positions=True)
     
     # Define a simple benchmark policy (random movement)
