@@ -35,7 +35,27 @@ class BernoulliStraightThrough(Bernoulli):
         return samples
 
 
-
+class RandomBernoulliPolicy(nn.Module):
+    def __init__(self, action_shape):
+        super().__init__()
+        self.action_shape = action_shape
+    
+    def get_dist(self, obs, goal, horizon=None):
+        """Get uniform random distribution"""
+        logits = torch.zeros((*obs.shape[:-1], self.action_shape), device=obs.device)
+        dist = BernoulliStraightThrough(logits=logits)
+        return dist
+    
+    def get_action(self, obs, goal, horizon=None):
+        """Sample action from policy"""
+        dist = self.get_dist(obs, goal, horizon)
+        return dist.rsample()
+    
+    def get_prior(self, dist):
+        """Get uniform prior distribution"""
+        prior = BernoulliStraightThrough(logits=torch.ones_like(dist.logits))
+        return prior
+    
 class BernoulliPolicy(nn.Module):
     def __init__(self, obs_shape, goal_shape, action_shape, size_h=256, num_h=2, horizon=False):
         super().__init__()
@@ -113,6 +133,27 @@ class DiscretePolicy(nn.Module):
     def get_dist(self, obs, goal):
         """Get distribution from observations and goal"""
         logits = self.forward(obs, goal)
+        dist = OneHotCategoricalStraightThrough(logits=logits)
+        return dist
+    
+    def get_action(self, obs, goal):
+        """Sample action from policy"""
+        dist = self.get_dist(obs, goal)
+        return dist.rsample()
+    
+    def get_prior(self, dist):
+        """Get uniform prior distribution"""
+        prior = OneHotCategoricalStraightThrough(logits=torch.ones_like(dist.logits))
+        return prior
+    
+class RandomDiscretePolicy(nn.Module):
+    def __init__(self, action_shape):
+        super().__init__()
+        self.action_shape = action_shape
+    
+    def get_dist(self, obs, goal):
+        """Get uniform random distribution"""
+        logits = torch.ones((obs.shape[0], self.action_shape), device=obs.device)
         dist = OneHotCategoricalStraightThrough(logits=logits)
         return dist
     

@@ -161,3 +161,10 @@ def plot_metrics(logger, metrics=None):
         fig.suptitle(f"Training Metrics (100-step average)", fontsize=14)
         plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     plt.show()
+
+
+
+
+
+# Example usage (assuming LoggerA and LoggerB are defined)
+# plot_combined_metrics_sns(LoggerA, LoggerB)
