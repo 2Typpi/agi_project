@@ -385,6 +385,39 @@ class ClassicControlBackbone(nn.Module):
     def forward(self, x):
         return self.input_projector(x)
 
+class SimpleShapeBackbone(nn.Module):
+    def __init__(self, input_channels=3, feature_dim=128):
+        super().__init__()
+        
+        # Layer 1: Captures color and edges
+        # Input: (B, 3, 32, 32) -> Output: (B, 16, 16, 16)
+        self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, stride=2, padding=1)
+        
+        # Layer 2: Captures basic shapes (square vs circle)
+        # Input: (B, 16, 16, 16) -> Output: (B, 32, 8, 8)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)
+        
+        # Layer 3: Final spatial refinement
+        # Input: (B, 32, 8, 8) -> Output: (B, 64, 4, 4)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        
+        # The flattened size is 64 * 4 * 4 = 1024
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(1024, feature_dim),
+            nn.ReLU(),
+            nn.LayerNorm(feature_dim)
+        )
+
+    def forward(self, x):
+        # Ensure input is normalized between 0 and 1
+        if x.max() > 1.0:
+            x = x / 255.0
+            
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        return self.fc(x)
 
 class ShallowWide(nn.Module):
     """

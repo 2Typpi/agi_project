@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from .ctm import ContinuousThoughtMachine
-from .modules import MiniGridBackbone, ClassicControlBackbone, SynapseUNET
+from .modules import MiniGridBackbone, ClassicControlBackbone, SimpleShapeBackbone, SynapseUNET
 from .utils import compute_decay
 from .constants import VALID_NEURON_SELECT_TYPES
 
@@ -87,6 +87,8 @@ class ContinuousThoughtMachineRL(ContinuousThoughtMachine):
             self.backbone = MiniGridBackbone(self.d_input)
         elif self.backbone_type == 'classic-control-backbone':
             self.backbone = ClassicControlBackbone(self.d_input)
+        elif self.backbone_type == 'simple-shape-backbone':
+            self.backbone = SimpleShapeBackbone(self.d_input)
         else:
             raise NotImplemented('The only backbone supported for RL are for navigation (symbolic C x H x W inputs) and classic control (vectors of length D).')
         pass
@@ -116,7 +118,7 @@ class ContinuousThoughtMachineRL(ContinuousThoughtMachine):
             f"Invalid neuron selection type: {self.neuron_select_type}"
         assert self.neuron_select_type != 'random-pairing', \
             f"Random pairing is not supported for RL."
-        assert self.backbone_type in ('navigation-backbone', 'classic-control-backbone'), \
+        assert self.backbone_type in ('navigation-backbone', 'classic-control-backbone', 'simple-shape-backbone'), \
             f"Invalid backbone_type: {self.backbone_type}"
         assert self.d_model >= (self.n_synch_out), \
             "d_model must be >= n_synch_out for neuron subsets"
