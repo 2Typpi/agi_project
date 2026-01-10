@@ -4,10 +4,10 @@ import numpy as np
 import math
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 
-from modules import SynapseUNET, Squeeze, SuperLinear, LearnableFourierPositionalEncoding, MultiLearnableFourierPositionalEncoding, CustomRotationalEmbedding, CustomRotationalEmbedding1D, ShallowWide
-from utils import compute_normalized_entropy
+from .modules import SynapseUNET, Squeeze, SuperLinear, LearnableFourierPositionalEncoding, MultiLearnableFourierPositionalEncoding, CustomRotationalEmbedding, CustomRotationalEmbedding1D, ShallowWide
+from .utils import compute_normalized_entropy
 
-from constants import (
+from .constants import (
     VALID_NEURON_SELECT_TYPES,
     VALID_BACKBONE_TYPES,
     VALID_POSITIONAL_EMBEDDING_TYPES
@@ -310,23 +310,6 @@ class ContinuousThoughtMachine(nn.Module, PyTorchModelHubMixin):
         """
         if self.backbone_type == 'shallow-wide':
             return 2048
-        elif self.backbone_type == 'parity_backbone':
-            return self.d_input
-        elif 'resnet' in self.backbone_type:
-            if '18' in self.backbone_type or '34' in self.backbone_type: 
-                if self.backbone_type.split('-')[1]=='1': return 64
-                elif self.backbone_type.split('-')[1]=='2': return 128
-                elif self.backbone_type.split('-')[1]=='3': return 256
-                elif self.backbone_type.split('-')[1]=='4': return 512
-                else:
-                    raise NotImplementedError
-            else:
-                if self.backbone_type.split('-')[1]=='1': return 256
-                elif self.backbone_type.split('-')[1]=='2': return 512
-                elif self.backbone_type.split('-')[1]=='3': return 1024
-                elif self.backbone_type.split('-')[1]=='4': return 2048
-                else:
-                    raise NotImplementedError
         elif self.backbone_type == 'none':
             return None
         else:

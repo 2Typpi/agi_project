@@ -10,3 +10,6 @@ dill                  # For Switchboard rule serialization
 pygame
 # Notebooks
 jupyterlab
+
+huggingface_hub
+safetensors
