@@ -1,7 +1,7 @@
 from typing import Tuple
 import torch.nn as nn
 import torch
-from einops.layers.torch import Rearrange
+#from einops.layers.torch import Rearrange
 
 
 class RSSMState(torch.Tensor):
@@ -169,7 +169,7 @@ class ImageDecoder(nn.Module):
         super(ImageDecoder, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(memory_dim + latent * cat, 16*16),
-            Rearrange("b (c w h) -> b c w h", c = 16, w = 4, h = 4),
+            #Rearrange("b (c w h) -> b c w h", c = 16, w = 4, h = 4),
             nn.Upsample((16,16)),
             nn.Conv2d(in_channels=16, out_channels=8, kernel_size=3, stride=1, padding=(1,1), padding_mode="zeros"),
             nn.ReLU(),
