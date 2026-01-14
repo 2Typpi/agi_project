@@ -103,3 +103,22 @@ class ImgDecoder(nn.Module):
         decoded_img = self.forward(state.combined)
         loss = torch.nn.MSELoss()(decoded_img, observation)
         return loss
+
+
+class MinesweeperConvEncoder(nn.Module):
+    def __init__(self, output_dim=256, fieldsize=(6, 6, 1)):
+        super().__init__()
+
+        # Input: (B, 1, H, W)
+        # CNN Encoder for spatial data
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1, ),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(32 * fieldsize[0] * fieldsize[1], output_dim, )
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+    
