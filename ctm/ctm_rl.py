@@ -3,7 +3,8 @@ import torch.nn as nn
 import numpy as np
 import math
 from .ctm import ContinuousThoughtMachine
-from .modules import MiniGridBackbone, ClassicControlBackbone, SimpleShapeBackbone, SynapseUNET
+from .img_coder import MinesweeperConvEncoder
+from .modules import MiniGridBackbone, ClassicControlBackbone
 from .utils import compute_decay
 from .constants import VALID_NEURON_SELECT_TYPES
 
@@ -21,7 +22,7 @@ class ContinuousThoughtMachineRL(ContinuousThoughtMachine):
                  backbone_type,
                  prediction_reshaper=[-1],
                  dropout=0,
-                 neuron_select_type='first-last',
+                 neuron_select_type='first-last'
                  ):
         super().__init__(
             iterations=iterations,
@@ -87,8 +88,8 @@ class ContinuousThoughtMachineRL(ContinuousThoughtMachine):
             self.backbone = MiniGridBackbone(self.d_input)
         elif self.backbone_type == 'classic-control-backbone':
             self.backbone = ClassicControlBackbone(self.d_input)
-        elif self.backbone_type == 'simple-shape-backbone':
-            self.backbone = SimpleShapeBackbone(self.d_input)
+        elif self.backbone_type == 'minesweeper-backbone':
+            self.backbone = MinesweeperConvEncoder(output_dim=self.d_input)
         else:
             raise NotImplemented('The only backbone supported for RL are for navigation (symbolic C x H x W inputs) and classic control (vectors of length D).')
         pass
@@ -118,7 +119,7 @@ class ContinuousThoughtMachineRL(ContinuousThoughtMachine):
             f"Invalid neuron selection type: {self.neuron_select_type}"
         assert self.neuron_select_type != 'random-pairing', \
             f"Random pairing is not supported for RL."
-        assert self.backbone_type in ('navigation-backbone', 'classic-control-backbone', 'simple-shape-backbone'), \
+        assert self.backbone_type in ('navigation-backbone', 'classic-control-backbone', 'minesweeper-backbone'), \
             f"Invalid backbone_type: {self.backbone_type}"
         assert self.d_model >= (self.n_synch_out), \
             "d_model must be >= n_synch_out for neuron subsets"
@@ -134,7 +135,7 @@ class ContinuousThoughtMachineRL(ContinuousThoughtMachine):
         post_activations_tracking = []
 
         # --- Featurise Input Data ---
-        features = self.backbone(x)
+        #features = self.backbone(x) Is done externally, because we use multiple environments
 
         # ---  Get Recurrent State ---
         state_trace, activated_state_trace = hidden_states
@@ -142,7 +143,7 @@ class ContinuousThoughtMachineRL(ContinuousThoughtMachine):
         # --- Recurrent Loop  ---
         for stepi in range(self.iterations):
             
-            pre_synapse_input = torch.concatenate((features.reshape(x.size(0), -1), activated_state_trace[:,:,-1]), -1)
+            pre_synapse_input = torch.concatenate((x.reshape(x.size(0), -1), activated_state_trace[:,:,-1]), -1)
 
             # --- Apply Synapses ---
             state = self.synapses(pre_synapse_input)
