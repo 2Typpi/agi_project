@@ -50,7 +50,6 @@ class CTMAgent(nn.Module):
 
     def get_states(self, x, ctm_state, done, track=False):
         num_envs = ctm_state[0].shape[0]
-        print(num_envs)
 
         if len(x.shape) == 4:
             _, C, H, W = x.shape
@@ -86,7 +85,7 @@ class CTMAgent(nn.Module):
     def get_action_and_value(self, x, ctm_state, done, action=None, track=False):
         hidden, ctm_state, tracking_data = self.get_states(x, ctm_state, done, track=track)
         action_logits = self.actor(hidden)
-        action_probs = Categorical(action_logits)
+        action_probs = Categorical(logits=action_logits)
 
         if action is None:
             action = action_probs.sample()
