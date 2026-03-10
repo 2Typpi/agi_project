@@ -6,7 +6,7 @@ from ctm.action_head import UniversalActionHead
 from ctm.critic_head import UniversalCriticHead
 
 class CTMAgent(nn.Module):
-    def __init__(self, ctm, continuous_state_trace, device):
+    def __init__(self, ctm, continuous_state_trace, device, num_actions):
         super().__init__()
 
         self.continious_state_trace = continuous_state_trace
@@ -17,7 +17,7 @@ class CTMAgent(nn.Module):
         actor_input_dim = critic_input_dim = self.ctm.synch_representation_size_out
         print(actor_input_dim, critic_input_dim)
 
-        self.actor = UniversalActionHead(latent_dim=actor_input_dim)
+        self.actor = UniversalActionHead(latent_dim=actor_input_dim, num_actions=num_actions)
         self.critic = UniversalCriticHead(latent_dim=critic_input_dim)
 
 

@@ -32,11 +32,11 @@ def train():
     num_minibatches = 1
     update_epochs = 1
     lr = 5e-4
-    
+
     # Reward and Advantage Estimation
     discount_gamma = 0.99
     gae_lambda = 0.95
-    
+
     # Loss Coefficients
     norm_adv = True
     ent_coef = 0.1
@@ -55,38 +55,41 @@ def train():
     minesweeper_enc = MinesweeperConvEncoder(ctm_latent_dim, env.state_im.shape)
 
     # --- Agent Initialization ---
-    ctm = ContinuousThoughtMachineRL(iterations=5, 
-                                   d_model=2048, 
-                                   d_input=ctm_latent_dim, 
-                                   n_synch_out=64, 
-                                   synapse_depth=8, 
-                                   memory_length=25, 
+    ctm = ContinuousThoughtMachineRL(iterations=5,
+                                   d_model=2048,
+                                   d_input=ctm_latent_dim,
+                                   n_synch_out=64,
+                                   synapse_depth=8,
+                                   memory_length=25,
                                    deep_nlms=False,
-                                   memory_hidden_dims=32, 
+                                   memory_hidden_dims=32,
                                    do_layernorm_nlm=False,
                                    backbone_type='minesweeper-backbone',
                                    )
 
-    agent = CTMAgent(ctm=ctm, continuous_state_trace=True, device=device)
-    optimizer = optim.Adam(agent.parameters(), lr=lr, eps=1e-5)
+    agent = CTMAgent(ctm=ctm, continuous_state_trace=True, device=device, num_actions=env.ntiles)
+    # minesweeper_enc must be in the optimizer so it gets trained alongside the agent
+    all_params = list(agent.parameters()) + list(minesweeper_enc.parameters())
+    optimizer = optim.Adam(all_params, lr=lr, eps=1e-5)
 
     # --- Training Loop ---
     total_time_steps = 5000
     num_updates = total_time_steps // (num_steps * num_envs)
-    
+
     batch_size = num_envs * num_steps
 
     # Tracking variables
     global_step = 0
     start_time = time.time()
-    
+
     # Initialize environment and agent state
     env.reset()
-    state_tensor = torch.from_numpy(env.state_im.T).float().unsqueeze(0)
-    next_obs = minesweeper_enc.forward(state_tensor).to(device)
+    raw_next_obs = torch.from_numpy(env.state_im.T).float().unsqueeze(0)  # (1, 1, H, W)
+    with torch.no_grad():
+        next_obs = minesweeper_enc(raw_next_obs).to(device)
     next_done = torch.zeros(num_envs).to(device)
     next_state = agent.get_initial_state(num_envs)
-    
+
     total_wins = 0
 
     # Get a sample action to define shapes
@@ -95,7 +98,8 @@ def train():
 
     for update in range(1, num_updates + 1):
         # --- Data Collection (Rollout) ---
-        obs = torch.zeros((num_steps, num_envs, ctm_latent_dim)).to(device)
+        # Store raw (unencoded) observations so we can re-encode during learning with gradient flow
+        raw_obs = torch.zeros((num_steps, num_envs, 1, height, width)).to(device)
         actions = torch.zeros((num_steps, num_envs) + sample_action.shape).to(device)
         logprobs = torch.zeros((num_steps, num_envs)).to(device)
         rewards = torch.zeros((num_steps, num_envs)).to(device)
@@ -107,22 +111,22 @@ def train():
         print("Start playing")
         for step in range(0, num_steps):
             global_step += num_envs
-            obs[step] = next_obs
+            raw_obs[step] = raw_next_obs  # store raw state for re-encoding during learning
             dones[step] = next_done
 
             with torch.no_grad():
                 action, logprob, _, value, next_state, _, _, _ = agent.get_action_and_value(next_obs, next_state, next_done)
                 values[step] = value.flatten()
-            
+
             actions[step] = action
             logprobs[step] = logprob
 
             # Execute action in the environment
-            # Squeeze action if it has an extra dimension
             action_to_step = action.squeeze().cpu().numpy()
+            print(action_to_step)
             next_obs_env, reward, done = env.step(action_to_step)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
-            
+
             # Reset if done
             if done:
                 print(f"Game ended at step {step}. Reward: {reward}")
@@ -134,8 +138,9 @@ def train():
                 next_state = agent.get_initial_state(num_envs)
 
             # Encode next state
-            state_tensor = torch.from_numpy(next_obs_env.T).float().unsqueeze(0)
-            next_obs = minesweeper_enc.forward(state_tensor).to(device)
+            raw_next_obs = torch.from_numpy(next_obs_env.T).float().unsqueeze(0).to(device)
+            with torch.no_grad():
+                next_obs = minesweeper_enc(raw_next_obs)
             next_done = torch.Tensor([done]).to(device)
 
         print("Start learning")
@@ -156,7 +161,7 @@ def train():
             returns = advantages + values
 
         # Flatten the batch
-        b_obs = obs.reshape((-1, ctm_latent_dim))
+        b_raw_obs = raw_obs.reshape((-1, 1, height, width))
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + sample_action.shape)
         b_advantages = advantages.reshape(-1)
@@ -169,17 +174,20 @@ def train():
         envsperbatch = num_envs // num_minibatches
         envinds = np.arange(num_envs)
         flatinds = np.arange(batch_size).reshape(num_steps, num_envs)
-        
+
         for epoch in range(update_epochs):
             for start in range(0, num_envs, envsperbatch):
                 end = start + envsperbatch
                 mbenvinds = envinds[start:end]
                 mb_inds = flatinds[:, mbenvinds].ravel()
 
-                selected_hidden_state = (initial_state[0][:, mbenvinds, :], initial_state[1][:, mbenvinds, :])
+                selected_hidden_state = (initial_state[0][mbenvinds], initial_state[1][mbenvinds])
+
+                # Re-encode raw observations so gradients flow back to minesweeper_enc
+                mb_obs = minesweeper_enc(b_raw_obs[mb_inds])
 
                 _, newlogprob, entropy, newvalue, _, _, _, _ = agent.get_action_and_value(
-                    b_obs[mb_inds],
+                    mb_obs,
                     selected_hidden_state,
                     b_dones[mb_inds],
                     b_actions.long()[mb_inds],
@@ -212,7 +220,7 @@ def train():
 
                 optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(agent.parameters(), 0.5)
+                nn.utils.clip_grad_norm_(all_params, 0.5)
                 optimizer.step()
 
         sps = int(global_step / (time.time() - start_time))
