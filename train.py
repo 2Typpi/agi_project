@@ -4,6 +4,7 @@ from torch import optim
 import os
 import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
 
 if os.path.basename(os.getcwd()) == 'exercises':
     os.chdir('../')
@@ -12,6 +13,169 @@ from ctm.ctm_agent import CTMAgent
 from ctm.ctm_rl import ContinuousThoughtMachineRL
 from ctm.img_coder import MinesweeperConvEncoder
 from environments.minesweeper.minesweeper import MinesweeperEnv
+
+
+def save_model(agent, minesweeper_enc, optimizer, global_step, update, total_wins,
+               episode_returns, episode_wins, update_logs, save_path):
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    torch.save({
+        'model_state_dict': agent.state_dict(),
+        'encoder_state_dict': minesweeper_enc.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'global_step': global_step,
+        'update': update,
+        'total_wins': total_wins,
+        'episode_returns': episode_returns,
+        'episode_wins': episode_wins,
+        'update_logs': update_logs,
+    }, save_path)
+
+
+def load_model(agent, minesweeper_enc, optimizer, checkpoint_path, device):
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    agent.load_state_dict(checkpoint['model_state_dict'])
+    minesweeper_enc.load_state_dict(checkpoint['encoder_state_dict'])
+
+    if optimizer is not None and 'optimizer_state_dict' in checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+    global_step = checkpoint.get('global_step', 0)
+    update = checkpoint.get('update', 0)
+    total_wins = checkpoint.get('total_wins', 0)
+    episode_returns = checkpoint.get('episode_returns', [])
+    episode_wins = checkpoint.get('episode_wins', [])
+    update_logs = checkpoint.get('update_logs', [])
+
+    print(f"Loaded checkpoint from {checkpoint_path} at update {update}, step {global_step}, wins {total_wins}")
+    return global_step, update, total_wins, episode_returns, episode_wins, update_logs
+
+
+def plot_results(episode_returns, episode_wins, update_logs, save_dir="./plots"):
+    """Generate publication-quality training curves and save to save_dir."""
+    os.makedirs(save_dir, exist_ok=True)
+
+    def rolling(values, window):
+        """Rolling mean and std of same length as input."""
+        arr = np.array(values, dtype=float)
+        mean = np.empty(len(arr))
+        std = np.empty(len(arr))
+        for i in range(len(arr)):
+            window_data = arr[max(0, i - window + 1):i + 1]
+            mean[i] = window_data.mean()
+            std[i] = window_data.std()
+        return mean, std
+
+    try:
+        plt.style.use('seaborn-v0_8-paper')
+    except OSError:
+        plt.style.use('bmh')
+
+    EP_WINDOW = 100   # episodes for smoothing episode-level metrics
+    UPD_WINDOW = 10   # updates for smoothing update-level metrics
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    fig.suptitle("CTM PPO — Minesweeper Training", fontsize=14, fontweight='bold')
+
+    # ------------------------------------------------------------------ #
+    # Row 0: episode-level metrics
+    # ------------------------------------------------------------------ #
+    if episode_returns:
+        ep_steps = np.array([r[0] for r in episode_returns])
+        ep_rets = np.array([r[1] for r in episode_returns], dtype=float)
+        ep_wins_arr = np.array([w[1] for w in episode_wins], dtype=float)
+
+        mean_wr, _ = rolling(ep_wins_arr, EP_WINDOW)
+        mean_ret, std_ret = rolling(ep_rets, EP_WINDOW)
+
+        # Win Rate
+        ax = axes[0, 0]
+        ax.plot(ep_steps, mean_wr, color='steelblue', linewidth=1.5)
+        ax.fill_between(ep_steps, np.clip(mean_wr - 0.05, 0, 1),
+                        np.clip(mean_wr + 0.05, 0, 1), alpha=0.2, color='steelblue')
+        ax.set_xlabel("Environment Steps")
+        ax.set_ylabel("Win Rate")
+        ax.set_title(f"Win Rate (rolling {EP_WINDOW} episodes)")
+        ax.set_ylim(0, 1)
+        ax.grid(True, alpha=0.3)
+
+        # Episode Return
+        ax = axes[0, 1]
+        ax.scatter(ep_steps, ep_rets, alpha=0.15, s=4, color='darkorange', linewidths=0)
+        ax.plot(ep_steps, mean_ret, color='darkorange', linewidth=1.8, label='Mean return')
+        ax.fill_between(ep_steps, mean_ret - std_ret, mean_ret + std_ret,
+                        alpha=0.2, color='darkorange', label='±1 std')
+        ax.set_xlabel("Environment Steps")
+        ax.set_ylabel("Episode Return")
+        ax.set_title(f"Episode Return (rolling {EP_WINDOW} episodes)")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+    else:
+        axes[0, 0].text(0.5, 0.5, "No episode data", ha='center', va='center',
+                        transform=axes[0, 0].transAxes)
+        axes[0, 1].text(0.5, 0.5, "No episode data", ha='center', va='center',
+                        transform=axes[0, 1].transAxes)
+
+    # ------------------------------------------------------------------ #
+    # Row 0, col 2: Explained Variance
+    # Row 1: loss components
+    # ------------------------------------------------------------------ #
+    if update_logs:
+        upd_steps = np.array([u['step'] for u in update_logs])
+        pg_losses = np.array([u['pg_loss'] for u in update_logs])
+        v_losses = np.array([u['v_loss'] for u in update_logs])
+        entropies = np.array([u['entropy'] for u in update_logs])
+        evs = np.array([u['explained_variance'] for u in update_logs])
+
+        mean_ev, _ = rolling(evs, UPD_WINDOW)
+        mean_pg, _ = rolling(pg_losses, UPD_WINDOW)
+        mean_vl, _ = rolling(v_losses, UPD_WINDOW)
+        mean_ent, _ = rolling(entropies, UPD_WINDOW)
+
+        # Explained Variance
+        ax = axes[0, 2]
+        ax.plot(upd_steps, mean_ev, color='seagreen', linewidth=1.5)
+        ax.axhline(0, color='gray', linestyle='--', linewidth=0.8, alpha=0.6)
+        ax.set_xlabel("Environment Steps")
+        ax.set_ylabel("Explained Variance")
+        ax.set_title("Value Function — Explained Variance")
+        ax.set_ylim(-1, 1)
+        ax.grid(True, alpha=0.3)
+
+        # Policy Loss
+        ax = axes[1, 0]
+        ax.plot(upd_steps, mean_pg, color='crimson', linewidth=1.5)
+        ax.set_xlabel("Environment Steps")
+        ax.set_ylabel("Policy Loss")
+        ax.set_title("Policy Loss (PPO Clipped)")
+        ax.grid(True, alpha=0.3)
+
+        # Value Loss
+        ax = axes[1, 1]
+        ax.plot(upd_steps, mean_vl, color='mediumpurple', linewidth=1.5)
+        ax.set_xlabel("Environment Steps")
+        ax.set_ylabel("Value Loss")
+        ax.set_title("Value Loss")
+        ax.grid(True, alpha=0.3)
+
+        # Entropy
+        ax = axes[1, 2]
+        ax.plot(upd_steps, mean_ent, color='teal', linewidth=1.5)
+        ax.set_xlabel("Environment Steps")
+        ax.set_ylabel("Entropy")
+        ax.set_title("Policy Entropy")
+        ax.grid(True, alpha=0.3)
+    else:
+        for ax in axes[0, 2], axes[1, 0], axes[1, 1], axes[1, 2]:
+            ax.text(0.5, 0.5, "No update data", ha='center', va='center',
+                    transform=ax.transAxes)
+
+    plt.tight_layout()
+    png_path = os.path.join(save_dir, "training_curves.png")
+    pdf_path = os.path.join(save_dir, "training_curves.pdf")
+    plt.savefig(png_path, dpi=200, bbox_inches='tight')
+    plt.savefig(pdf_path, bbox_inches='tight')
+    plt.close()
+    print(f"Plots saved to {png_path} and {pdf_path}")
 
 
 def train():
@@ -28,9 +192,9 @@ def train():
 
     # --- Training Hyperparameters ---
     num_steps = 50
-    num_envs = 1
-    num_minibatches = 1
-    update_epochs = 1
+    num_envs = 4
+    num_minibatches = 4
+    update_epochs = 4
     lr = 5e-4
 
     # Reward and Advantage Estimation
@@ -51,8 +215,8 @@ def train():
     n_mines = 10
 
     # --- Environment Setup ---
-    env = MinesweeperEnv(width, height, n_mines)
-    minesweeper_enc = MinesweeperConvEncoder(ctm_latent_dim, env.state_im.shape)
+    envs = [MinesweeperEnv(width, height, n_mines) for _ in range(num_envs)]
+    minesweeper_enc = MinesweeperConvEncoder(ctm_latent_dim, envs[0].state_im.shape)
 
     # --- Agent Initialization ---
     ctm = ContinuousThoughtMachineRL(iterations=5,
@@ -67,10 +231,25 @@ def train():
                                    backbone_type='minesweeper-backbone',
                                    )
 
-    agent = CTMAgent(ctm=ctm, continuous_state_trace=True, device=device, num_actions=env.ntiles)
+    agent = CTMAgent(ctm=ctm, continuous_state_trace=True, device=device, num_actions=envs[0].ntiles)
     # minesweeper_enc must be in the optimizer so it gets trained alongside the agent
     all_params = list(agent.parameters()) + list(minesweeper_enc.parameters())
     optimizer = optim.Adam(all_params, lr=lr, eps=1e-5)
+
+    # --- Checkpoint ---
+    checkpoint_path = "./models/checkpoint.pt"
+    global_step = 0
+    start_update = 0
+    total_wins = 0
+    episode_returns = []   # [(global_step, return), ...]
+    episode_wins = []      # [(global_step, 1 if win else 0), ...]
+    update_logs = []       # [{step, pg_loss, v_loss, entropy, explained_variance}, ...]
+
+    if os.path.exists(checkpoint_path):
+        global_step, start_update, total_wins, episode_returns, episode_wins, update_logs = \
+            load_model(agent, minesweeper_enc, optimizer, checkpoint_path, device)
+    else:
+        print("No checkpoint found, starting fresh.")
 
     # --- Training Loop ---
     total_time_steps = 5000
@@ -78,29 +257,27 @@ def train():
 
     batch_size = num_envs * num_steps
 
-    # Tracking variables
-    global_step = 0
     start_time = time.time()
 
-    # Initialize environment and agent state
-    env.reset()
-    raw_next_obs = torch.from_numpy(env.state_im.T).float().unsqueeze(0)  # (1, 1, H, W)
+    # Initialize environments and agent state
+    for env in envs:
+        env.reset()
+    raw_next_obs = torch.stack([
+        torch.from_numpy(env.state_im.T).float() for env in envs
+    ]).to(device)  # (num_envs, 1, H, W)
     with torch.no_grad():
-        next_obs = minesweeper_enc(raw_next_obs).to(device)
+        next_obs = minesweeper_enc(raw_next_obs)  # (num_envs, latent_dim)
     next_done = torch.zeros(num_envs).to(device)
     next_state = agent.get_initial_state(num_envs)
 
-    total_wins = 0
+    # Per-env episode accumulators for tracking
+    ep_reward_buf = np.zeros(num_envs)
 
-    # Get a sample action to define shapes
-    with torch.no_grad():
-        sample_action, _, _, _, _, _, _, _ = agent.get_action_and_value(next_obs, next_state, next_done)
-
-    for update in range(1, num_updates + 1):
+    for update in range(start_update + 1, num_updates + 1):
         # --- Data Collection (Rollout) ---
         # Store raw (unencoded) observations so we can re-encode during learning with gradient flow
         raw_obs = torch.zeros((num_steps, num_envs, 1, height, width)).to(device)
-        actions = torch.zeros((num_steps, num_envs) + sample_action.shape).to(device)
+        actions = torch.zeros((num_steps, num_envs)).to(device)
         logprobs = torch.zeros((num_steps, num_envs)).to(device)
         rewards = torch.zeros((num_steps, num_envs)).to(device)
         dones = torch.zeros((num_steps, num_envs)).to(device)
@@ -121,27 +298,36 @@ def train():
             actions[step] = action
             logprobs[step] = logprob
 
-            # Execute action in the environment
-            action_to_step = action.squeeze().cpu().numpy()
-            print(action_to_step)
-            next_obs_env, reward, done = env.step(action_to_step)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            # Execute actions across all environments
+            new_raw_obs_list = []
+            new_rewards = []
+            new_dones = []
 
-            # Reset if done
-            if done:
-                print(f"Game ended at step {step}. Reward: {reward}")
-                if (reward > 0.5):
-                    total_wins += 1
-                env.reset()
-                next_obs_env = env.state_im
-                # Reset agent's memory
-                next_state = agent.get_initial_state(num_envs)
+            for i, env in enumerate(envs):
+                next_obs_env_i, reward_i, done_i = env.step(int(action[i].item()))
+                ep_reward_buf[i] += reward_i
 
-            # Encode next state
-            raw_next_obs = torch.from_numpy(next_obs_env.T).float().unsqueeze(0).to(device)
+                if done_i:
+                    is_win = reward_i > 0.5
+                    if is_win:
+                        total_wins += 1
+                    episode_returns.append((global_step, ep_reward_buf[i]))
+                    episode_wins.append((global_step, int(is_win)))
+                    ep_reward_buf[i] = 0.0
+                    env.reset()
+                    next_obs_env_i = env.state_im
+
+                new_raw_obs_list.append(torch.from_numpy(next_obs_env_i.T).float())
+                new_rewards.append(reward_i)
+                new_dones.append(float(done_i))
+
+            rewards[step] = torch.tensor(new_rewards, device=device)
+            next_done = torch.tensor(new_dones, device=device)
+
+            # Per-env CTM state reset is handled by CTMAgent._get_hidden_states via next_done masking
+            raw_next_obs = torch.stack(new_raw_obs_list).to(device)  # (num_envs, 1, H, W)
             with torch.no_grad():
-                next_obs = minesweeper_enc(raw_next_obs)
-            next_done = torch.Tensor([done]).to(device)
+                next_obs = minesweeper_enc(raw_next_obs)  # (num_envs, latent_dim)
 
         print("Start learning")
         # --- Learning ---
@@ -163,7 +349,7 @@ def train():
         # Flatten the batch
         b_raw_obs = raw_obs.reshape((-1, 1, height, width))
         b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + sample_action.shape)
+        b_actions = actions.reshape(-1)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
@@ -175,7 +361,10 @@ def train():
         envinds = np.arange(num_envs)
         flatinds = np.arange(batch_size).reshape(num_steps, num_envs)
 
+        mb_pg_losses, mb_v_losses, mb_entropies = [], [], []
+
         for epoch in range(update_epochs):
+            np.random.shuffle(envinds)
             for start in range(0, num_envs, envsperbatch):
                 end = start + envsperbatch
                 mbenvinds = envinds[start:end]
@@ -223,8 +412,30 @@ def train():
                 nn.utils.clip_grad_norm_(all_params, 0.5)
                 optimizer.step()
 
+                mb_pg_losses.append(pg_loss.item())
+                mb_v_losses.append(v_loss.item())
+                mb_entropies.append(entropy_loss.item())
+
+        # Explained variance: how well the value function predicts returns
+        with torch.no_grad():
+            ev = 1.0 - (b_returns - b_values).var() / (b_returns.var() + 1e-8)
+
+        update_logs.append({
+            'step': global_step,
+            'pg_loss': float(np.mean(mb_pg_losses)),
+            'v_loss': float(np.mean(mb_v_losses)),
+            'entropy': float(np.mean(mb_entropies)),
+            'explained_variance': float(ev.item()),
+        })
+
         sps = int(global_step / (time.time() - start_time))
-        print(f"Update {update}/{num_updates}, Step {global_step}, Loss: {loss.item():.4f}, SPS: {sps}")
+        print(f"Update {update}/{num_updates}, Step {global_step}, Loss: {loss.item():.4f}, "
+              f"EV: {ev.item():.3f}, SPS: {sps}, Wins: {total_wins}")
+    save_model(agent, minesweeper_enc, optimizer, global_step, update, total_wins,
+                episode_returns, episode_wins, update_logs, checkpoint_path)
+
+    plot_results(episode_returns, episode_wins, update_logs)
+
 
 if __name__ == '__main__':
     train()
