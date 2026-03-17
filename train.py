@@ -196,6 +196,7 @@ def train():
     num_minibatches = 4
     update_epochs = 4
     lr = 5e-4
+    save_interval = 50  # Save checkpoint every N updates (0 = only save at end)
 
     # Reward and Advantage Estimation
     discount_gamma = 0.99
@@ -431,6 +432,15 @@ def train():
         sps = int(global_step / (time.time() - start_time))
         print(f"Update {update}/{num_updates}, Step {global_step}, Loss: {loss.item():.4f}, "
               f"EV: {ev.item():.3f}, SPS: {sps}, Wins: {total_wins}")
+
+        # Periodic checkpoint saving
+        if save_interval > 0 and update % save_interval == 0:
+            print(f"Saving checkpoint at update {update}...")
+            save_model(agent, minesweeper_enc, optimizer, global_step, update, total_wins,
+                       episode_returns, episode_wins, update_logs, checkpoint_path)
+
+    # Final checkpoint
+    print(f"Saving final checkpoint...")
     save_model(agent, minesweeper_enc, optimizer, global_step, update, total_wins,
                 episode_returns, episode_wins, update_logs, checkpoint_path)
 
