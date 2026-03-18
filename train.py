@@ -191,12 +191,12 @@ def train():
     torch.set_default_device(device)
 
     # --- Training Hyperparameters ---
-    num_steps = 50
-    num_envs = 4
+    num_steps = 128
+    num_envs = 8
     num_minibatches = 4
     update_epochs = 4
-    lr = 5e-4
-    save_interval = 50  # Save checkpoint every N updates (0 = only save at end)
+    lr = 3e-4
+    save_interval = 100
 
     # Reward and Advantage Estimation
     discount_gamma = 0.99
@@ -204,16 +204,16 @@ def train():
 
     # Loss Coefficients
     norm_adv = True
-    ent_coef = 0.1
-    clip_vloss = False
-    clip_coef = 0.1
-    vf_coef = 0.25
+    ent_coef = 0.01
+    clip_vloss = True
+    clip_coef = 0.2
+    vf_coef = 0.5
 
     # CTM & Env specific
     ctm_latent_dim = 256
     width = 6
     height = 6
-    n_mines = 10
+    n_mines = 6
 
     # --- Environment Setup ---
     envs = [MinesweeperEnv(width, height, n_mines) for _ in range(num_envs)]
@@ -221,14 +221,14 @@ def train():
 
     # --- Agent Initialization ---
     ctm = ContinuousThoughtMachineRL(iterations=5,
-                                   d_model=2048,
+                                   d_model=1024,
                                    d_input=ctm_latent_dim,
                                    n_synch_out=64,
-                                   synapse_depth=8,
-                                   memory_length=25,
+                                   synapse_depth=6,
+                                   memory_length=20,
                                    deep_nlms=False,
-                                   memory_hidden_dims=32,
-                                   do_layernorm_nlm=False,
+                                   memory_hidden_dims=64,
+                                   do_layernorm_nlm=True,
                                    backbone_type='minesweeper-backbone',
                                    )
 
@@ -253,7 +253,7 @@ def train():
         print("No checkpoint found, starting fresh.")
 
     # --- Training Loop ---
-    total_time_steps = 5000
+    total_time_steps = 500_000
     num_updates = total_time_steps // (num_steps * num_envs)
 
     batch_size = num_envs * num_steps
@@ -440,6 +440,12 @@ def train():
                        episode_returns, episode_wins, update_logs, checkpoint_path)
 
     # Final checkpoint
+    total_time = time.time() - start_time
+    hours = int(total_time // 3600)
+    minutes = int((total_time % 3600) // 60)
+    seconds = int(total_time % 60)
+
+    print(f"\nTraining completed in {hours}h {minutes}m {seconds}s")
     print(f"Saving final checkpoint...")
     save_model(agent, minesweeper_enc, optimizer, global_step, update, total_wins,
                 episode_returns, episode_wins, update_logs, checkpoint_path)
