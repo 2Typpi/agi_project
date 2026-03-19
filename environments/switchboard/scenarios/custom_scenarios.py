@@ -29,4 +29,10 @@ class TemporalPPORules(Scenario):
         # Hold rule (button 9): Duration-based activation
         rules.append(RuleBuilder.hold(action_idx=9, obs_idx=7, duration=5, strength=1.0))
 
+        # Hold rule (button 6): Duration-based activation
+        rules.append(RuleBuilder.hold(action_idx=6, obs_idx=8, duration=3, strength=1.0))
+
+        # Hold rule (button 6): Duration-based activation
+        rules.append(RuleBuilder.hold(action_idx=6, obs_idx=9, duration=15, strength=1.0))
+
         return rules
