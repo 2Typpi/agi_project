@@ -15,7 +15,7 @@ from environments.switchboard.switchboard import Switchboard
 
 
 def save_model(agent, optimizer, global_step, update, episode_returns,
-               episode_slots_activated, update_logs, save_path):
+               episode_slots_activated, slot_activation_history, update_logs, save_path):
     """Save checkpoint (no external encoder for switchboard)"""
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save({
@@ -25,6 +25,7 @@ def save_model(agent, optimizer, global_step, update, episode_returns,
         'update': update,
         'episode_returns': episode_returns,
         'episode_slots_activated': episode_slots_activated,
+        'slot_activation_history': slot_activation_history,
         'update_logs': update_logs,
     }, save_path)
 
@@ -41,10 +42,11 @@ def load_model(agent, optimizer, checkpoint_path, device):
     update = checkpoint.get('update', 0)
     episode_returns = checkpoint.get('episode_returns', [])
     episode_slots_activated = checkpoint.get('episode_slots_activated', [])
+    slot_activation_history = checkpoint.get('slot_activation_history', [])
     update_logs = checkpoint.get('update_logs', [])
 
     print(f"Loaded checkpoint from {checkpoint_path} at update {update}, step {global_step}")
-    return global_step, update, episode_returns, episode_slots_activated, update_logs
+    return global_step, update, episode_returns, episode_slots_activated, slot_activation_history, update_logs
 
 
 def compute_reward(prev_obs, next_obs):
@@ -185,6 +187,142 @@ def plot_results(episode_returns, episode_slots_activated, update_logs, save_dir
     print(f"Plots saved to {png_path} and {pdf_path}")
 
 
+def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
+    """
+    Generate per-slot activation visualizations showing which rules were discovered.
+
+    Creates three plots:
+    1. Slot Activation Timeline (scatter): When each slot was active
+    2. Slot Frequency Heatmap: Activation rate per training window
+    3. Cumulative Discovery: Number of unique slots discovered over time
+    """
+    if not slot_activation_history:
+        print("No slot activation history to plot")
+        return
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Rule labels for each slot
+    slot_labels = [
+        "0: Direct btn 0",
+        "1: Direct btn 1",
+        "2: 3-step delay",
+        "3: 5-step delay",
+        "4: 8-step delay",
+        "5: AND(5+6)",
+        "6: Seq(7→8→9)",
+        "7: Hold btn 9",
+        "8: Unused",
+        "9: Unused"
+    ]
+
+    # Extract data
+    all_steps = np.array([x[0] for x in slot_activation_history])
+    all_slot_sets = [set(x[1]) for x in slot_activation_history]
+
+    # Build activation matrix: (num_episodes, 10 slots)
+    num_episodes = len(all_slot_sets)
+    activation_matrix = np.zeros((num_episodes, 10))
+    for ep_idx, slots in enumerate(all_slot_sets):
+        for slot in slots:
+            activation_matrix[ep_idx, slot] = 1
+
+    # Setup plotting style
+    try:
+        plt.style.use('seaborn-v0_8-paper')
+    except OSError:
+        plt.style.use('bmh')
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig.suptitle("CTM PPO — Slot Discovery Analysis", fontsize=14, fontweight='bold')
+
+    # Plot 1: Slot Activation Timeline (Scatter)
+    ax = axes[0]
+    colors = plt.cm.tab10(np.linspace(0, 1, 10))
+
+    for slot_idx in range(10):
+        # Find episodes where this slot was active
+        active_episodes = np.where(activation_matrix[:, slot_idx] > 0)[0]
+        if len(active_episodes) > 0:
+            ax.scatter(all_steps[active_episodes],
+                      np.full(len(active_episodes), slot_idx),
+                      s=3, alpha=0.6, color=colors[slot_idx],
+                      label=f"Slot {slot_idx}")
+
+    ax.set_xlabel("Training Steps")
+    ax.set_ylabel("Slot Index")
+    ax.set_title("Slot Activation Timeline")
+    ax.set_ylim(-0.5, 9.5)
+    ax.set_yticks(range(10))
+    ax.grid(True, alpha=0.3, axis='x')
+
+    # Plot 2: Slot Frequency Heatmap
+    ax = axes[1]
+
+    # Bin episodes into training windows
+    num_windows = 10
+    max_step = all_steps[-1] if len(all_steps) > 0 else 100000
+    window_edges = np.linspace(0, max_step, num_windows + 1)
+    window_centers = (window_edges[:-1] + window_edges[1:]) / 2
+
+    # Compute activation frequency per window
+    heatmap_data = np.zeros((10, num_windows))
+    for window_idx in range(num_windows):
+        window_mask = (all_steps >= window_edges[window_idx]) & (all_steps < window_edges[window_idx + 1])
+        if window_mask.sum() > 0:
+            heatmap_data[:, window_idx] = activation_matrix[window_mask].mean(axis=0) * 100
+
+    im = ax.imshow(heatmap_data, aspect='auto', cmap='YlOrRd', vmin=0, vmax=100)
+    ax.set_xlabel("Training Progress")
+    ax.set_ylabel("Slot (Rule)")
+    ax.set_title("Slot Activation Frequency (%)")
+    ax.set_yticks(range(10))
+    ax.set_yticklabels(slot_labels, fontsize=8)
+    ax.set_xticks(range(num_windows))
+    ax.set_xticklabels([f"{int(window_centers[i]/1000)}k" for i in range(num_windows)],
+                       rotation=45, ha='right', fontsize=8)
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Activation %', rotation=270, labelpad=15)
+
+    # Plot 3: Cumulative Discovery
+    ax = axes[2]
+
+    # Compute cumulative unique slots discovered
+    cumulative_slots = np.zeros(num_episodes)
+    discovered = set()
+    for ep_idx, slots in enumerate(all_slot_sets):
+        discovered.update(slots)
+        cumulative_slots[ep_idx] = len(discovered)
+
+    ax.plot(all_steps, cumulative_slots, color='steelblue', linewidth=2)
+    ax.axhline(8, color='red', linestyle='--', linewidth=1, alpha=0.6, label='Theoretical Max (8 rules)')
+    ax.set_xlabel("Training Steps")
+    ax.set_ylabel("Unique Slots Discovered")
+    ax.set_title("Cumulative Rule Discovery")
+    ax.set_ylim(0, 10)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    png_path = os.path.join(save_dir, "slot_discovery.png")
+    pdf_path = os.path.join(save_dir, "slot_discovery.pdf")
+    plt.savefig(png_path, dpi=200, bbox_inches='tight')
+    plt.savefig(pdf_path, bbox_inches='tight')
+    plt.close()
+
+    print(f"Slot discovery plots saved to {png_path} and {pdf_path}")
+
+    # Print summary statistics
+    print("\n=== Slot Discovery Report ===")
+    for slot_idx in range(10):
+        activation_rate = activation_matrix[:, slot_idx].mean() * 100
+        status = "✓" if activation_rate > 50 else "✗"
+        print(f"{slot_labels[slot_idx]}: {activation_rate:5.1f}% {status}")
+    print(f"\nOverall: {int(cumulative_slots[-1])}/8 rules discovered")
+
+
 def train():
     # Configure device
     device_config = -1
@@ -268,10 +406,11 @@ def train():
     start_update = 0
     episode_returns = []
     episode_slots_activated = []
+    slot_activation_history = []
     update_logs = []
 
     if os.path.exists(checkpoint_path):
-        global_step, start_update, episode_returns, episode_slots_activated, update_logs = \
+        global_step, start_update, episode_returns, episode_slots_activated, slot_activation_history, update_logs = \
             load_model(agent, optimizer, checkpoint_path, device)
     else:
         print("No checkpoint found, starting fresh.")
@@ -347,6 +486,7 @@ def train():
                 if done_i:
                     episode_returns.append((global_step, ep_reward_buf[i]))
                     episode_slots_activated.append((global_step, len(ep_slots_buf[i])))
+                    slot_activation_history.append((global_step, sorted(list(ep_slots_buf[i]))))
                     ep_reward_buf[i] = 0.0
                     ep_slots_buf[i] = set()
                     ep_step_count[i] = 0
@@ -466,8 +606,9 @@ def train():
         if save_interval > 0 and update % save_interval == 0:
             print(f"Saving checkpoint at update {update}...")
             save_model(agent, optimizer, global_step, update, episode_returns,
-                       episode_slots_activated, update_logs, checkpoint_path)
+                       episode_slots_activated, slot_activation_history, update_logs, checkpoint_path)
             plot_results(episode_returns, episode_slots_activated, update_logs)
+            plot_slot_discovery(slot_activation_history)
 
     total_time = time.time() - start_time
     hours = int(total_time // 3600)
@@ -477,9 +618,10 @@ def train():
     print(f"\nTraining completed in {hours}h {minutes}m {seconds}s")
     print(f"Saving final checkpoint...")
     save_model(agent, optimizer, global_step, update, episode_returns,
-               episode_slots_activated, update_logs, checkpoint_path)
+               episode_slots_activated, slot_activation_history, update_logs, checkpoint_path)
 
     plot_results(episode_returns, episode_slots_activated, update_logs)
+    plot_slot_discovery(slot_activation_history)
 
 
 if __name__ == '__main__':
