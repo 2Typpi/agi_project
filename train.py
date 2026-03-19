@@ -70,15 +70,12 @@ def plot_results(episode_returns, episode_wins, update_logs, save_dir="./plots")
     except OSError:
         plt.style.use('bmh')
 
-    EP_WINDOW = 100   # episodes for smoothing episode-level metrics
-    UPD_WINDOW = 10   # updates for smoothing update-level metrics
+    EP_WINDOW = 100
+    UPD_WINDOW = 10 
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
     fig.suptitle("CTM PPO — Minesweeper Training", fontsize=14, fontweight='bold')
 
-    # ------------------------------------------------------------------ #
-    # Row 0: episode-level metrics
-    # ------------------------------------------------------------------ #
     if episode_returns:
         ep_steps = np.array([r[0] for r in episode_returns])
         ep_rets = np.array([r[1] for r in episode_returns], dtype=float)
@@ -115,10 +112,6 @@ def plot_results(episode_returns, episode_wins, update_logs, save_dir="./plots")
         axes[0, 1].text(0.5, 0.5, "No episode data", ha='center', va='center',
                         transform=axes[0, 1].transAxes)
 
-    # ------------------------------------------------------------------ #
-    # Row 0, col 2: Explained Variance
-    # Row 1: loss components
-    # ------------------------------------------------------------------ #
     if update_logs:
         upd_steps = np.array([u['step'] for u in update_logs])
         pg_losses = np.array([u['pg_loss'] for u in update_logs])
@@ -233,18 +226,16 @@ def train():
                                    )
 
     agent = CTMAgent(ctm=ctm, continuous_state_trace=True, device=device, num_actions=envs[0].ntiles)
-    # minesweeper_enc must be in the optimizer so it gets trained alongside the agent
     all_params = list(agent.parameters()) + list(minesweeper_enc.parameters())
     optimizer = optim.Adam(all_params, lr=lr, eps=1e-5)
 
-    # --- Checkpoint ---
     checkpoint_path = "./models/checkpoint.pt"
     global_step = 0
     start_update = 0
     total_wins = 0
-    episode_returns = []   # [(global_step, return), ...]
-    episode_wins = []      # [(global_step, 1 if win else 0), ...]
-    update_logs = []       # [{step, pg_loss, v_loss, entropy, explained_variance}, ...]
+    episode_returns = []
+    episode_wins = []
+    update_logs = []
 
     if os.path.exists(checkpoint_path):
         global_step, start_update, total_wins, episode_returns, episode_wins, update_logs = \
@@ -252,7 +243,6 @@ def train():
     else:
         print("No checkpoint found, starting fresh.")
 
-    # --- Training Loop ---
     total_time_steps = 1_000_000
     num_updates = total_time_steps // (num_steps * num_envs)
 
@@ -265,20 +255,18 @@ def train():
         env.reset()
     raw_next_obs = torch.stack([
         torch.from_numpy(env.state_im.T).float() for env in envs
-    ]).to(device)  # (num_envs, 1, H, W)
+    ]).to(device)
     with torch.no_grad():
-        next_obs = minesweeper_enc(raw_next_obs)  # (num_envs, latent_dim)
+        next_obs = minesweeper_enc(raw_next_obs)
     next_done = torch.zeros(num_envs).to(device)
     next_state = agent.get_initial_state(num_envs)
 
-    # Per-env episode accumulators for tracking
     ep_reward_buf = np.zeros(num_envs)
 
     for update in range(start_update + 1, num_updates + 1):
         current_ent_coef = ent_coef * max(0.2, 1.0 - (update / num_updates) * 0.8)
 
-        # --- Data Collection (Rollout) ---
-        # Store raw (unencoded) observations so we can re-encode during learning with gradient flow
+        # --- Data Collection ---
         raw_obs = torch.zeros((num_steps, num_envs, 1, height, width)).to(device)
         actions = torch.zeros((num_steps, num_envs)).to(device)
         logprobs = torch.zeros((num_steps, num_envs)).to(device)
@@ -291,7 +279,7 @@ def train():
         print("Start playing")
         for step in range(0, num_steps):
             global_step += num_envs
-            raw_obs[step] = raw_next_obs  # store raw state for re-encoding during learning
+            raw_obs[step] = raw_next_obs
             dones[step] = next_done
 
             with torch.no_grad():
@@ -327,10 +315,9 @@ def train():
             rewards[step] = torch.tensor(new_rewards, device=device)
             next_done = torch.tensor(new_dones, device=device)
 
-            # Per-env CTM state reset is handled by CTMAgent._get_hidden_states via next_done masking
-            raw_next_obs = torch.stack(new_raw_obs_list).to(device)  # (num_envs, 1, H, W)
+            raw_next_obs = torch.stack(new_raw_obs_list).to(device)
             with torch.no_grad():
-                next_obs = minesweeper_enc(raw_next_obs)  # (num_envs, latent_dim)
+                next_obs = minesweeper_enc(raw_next_obs)
 
         print("Start learning")
         # --- Learning ---
@@ -358,7 +345,6 @@ def train():
         b_values = values.reshape(-1)
         b_dones = dones.reshape(-1)
 
-        # Optimizing the policy and value network
         assert num_envs % num_minibatches == 0
         envsperbatch = num_envs // num_minibatches
         envinds = np.arange(num_envs)
@@ -375,7 +361,6 @@ def train():
 
                 selected_hidden_state = (initial_state[0][mbenvinds], initial_state[1][mbenvinds])
 
-                # Re-encode raw observations so gradients flow back to minesweeper_enc
                 mb_obs = minesweeper_enc(b_raw_obs[mb_inds])
 
                 _, newlogprob, entropy, newvalue, _, _, _, _ = agent.get_action_and_value(
@@ -419,7 +404,6 @@ def train():
                 mb_v_losses.append(v_loss.item())
                 mb_entropies.append(entropy_loss.item())
 
-        # Explained variance: how well the value function predicts returns
         with torch.no_grad():
             ev = 1.0 - (b_returns - b_values).var() / (b_returns.var() + 1e-8)
 
@@ -441,7 +425,6 @@ def train():
             save_model(agent, minesweeper_enc, optimizer, global_step, update, total_wins,
                        episode_returns, episode_wins, update_logs, checkpoint_path)
 
-    # Final checkpoint
     total_time = time.time() - start_time
     hours = int(total_time // 3600)
     minutes = int((total_time % 3600) // 60)
