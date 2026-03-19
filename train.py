@@ -192,10 +192,10 @@ def train():
 
     # --- Training Hyperparameters ---
     num_steps = 128
-    num_envs = 8
+    num_envs = 16
     num_minibatches = 4
     update_epochs = 4
-    lr = 3e-4
+    lr = 1e-4
     save_interval = 100
 
     # Reward and Advantage Estimation
@@ -204,7 +204,7 @@ def train():
 
     # Loss Coefficients
     norm_adv = True
-    ent_coef = 0.01
+    ent_coef = 0.05
     clip_vloss = True
     clip_coef = 0.2
     vf_coef = 0.5
@@ -213,14 +213,14 @@ def train():
     ctm_latent_dim = 256
     width = 6
     height = 6
-    n_mines = 6
+    n_mines = 4
 
     # --- Environment Setup ---
     envs = [MinesweeperEnv(width, height, n_mines) for _ in range(num_envs)]
     minesweeper_enc = MinesweeperConvEncoder(ctm_latent_dim, envs[0].state_im.shape)
 
     # --- Agent Initialization ---
-    ctm = ContinuousThoughtMachineRL(iterations=5,
+    ctm = ContinuousThoughtMachineRL(iterations=8,
                                    d_model=1024,
                                    d_input=ctm_latent_dim,
                                    n_synch_out=64,
@@ -253,7 +253,7 @@ def train():
         print("No checkpoint found, starting fresh.")
 
     # --- Training Loop ---
-    total_time_steps = 500_000
+    total_time_steps = 1_000_000
     num_updates = total_time_steps // (num_steps * num_envs)
 
     batch_size = num_envs * num_steps
@@ -275,6 +275,8 @@ def train():
     ep_reward_buf = np.zeros(num_envs)
 
     for update in range(start_update + 1, num_updates + 1):
+        current_ent_coef = ent_coef * max(0.2, 1.0 - (update / num_updates) * 0.8)
+
         # --- Data Collection (Rollout) ---
         # Store raw (unencoded) observations so we can re-encode during learning with gradient flow
         raw_obs = torch.zeros((num_steps, num_envs, 1, height, width)).to(device)
@@ -406,7 +408,7 @@ def train():
                     v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - ent_coef * entropy_loss + v_loss * vf_coef
+                loss = pg_loss - current_ent_coef * entropy_loss + v_loss * vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -431,7 +433,7 @@ def train():
 
         sps = int(global_step / (time.time() - start_time))
         print(f"Update {update}/{num_updates}, Step {global_step}, Loss: {loss.item():.4f}, "
-              f"EV: {ev.item():.3f}, SPS: {sps}, Wins: {total_wins}")
+              f"EV: {ev.item():.3f}, EntCoef: {current_ent_coef:.4f}, SPS: {sps}, Wins: {total_wins}")
 
         # Periodic checkpoint saving
         if save_interval > 0 and update % save_interval == 0:
