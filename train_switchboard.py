@@ -205,29 +205,26 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
     # Rule labels for each slot
     slot_labels = [
         "0: Direct btn 0",
-        "1: Direct btn 1",
+        "1: Hold And 1+8 (3 step)",
         "2: 3-step delay",
         "3: 5-step delay",
         "4: 8-step delay",
         "5: AND(5+6)",
         "6: Seq(7→8→9)",
-        "7: Hold btn 9",
-        "8: Unused",
-        "9: Unused"
+        "7: Hold btn 9 (5 step)",
+        "8: Hold btn 6 (3 step)",
+        "9: Hold btn 6 (15 step)"
     ]
 
-    # Extract data
     all_steps = np.array([x[0] for x in slot_activation_history])
     all_slot_sets = [set(x[1]) for x in slot_activation_history]
 
-    # Build activation matrix: (num_episodes, 10 slots)
     num_episodes = len(all_slot_sets)
     activation_matrix = np.zeros((num_episodes, 10))
     for ep_idx, slots in enumerate(all_slot_sets):
         for slot in slots:
             activation_matrix[ep_idx, slot] = 1
 
-    # Setup plotting style
     try:
         plt.style.use('seaborn-v0_8-paper')
     except OSError:
@@ -297,7 +294,7 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
         cumulative_slots[ep_idx] = len(discovered)
 
     ax.plot(all_steps, cumulative_slots, color='steelblue', linewidth=2)
-    ax.axhline(8, color='red', linestyle='--', linewidth=1, alpha=0.6, label='Theoretical Max (8 rules)')
+    ax.axhline(10, color='red', linestyle='--', linewidth=1, alpha=0.6, label='Theoretical Max (10 rules)')
     ax.set_xlabel("Training Steps")
     ax.set_ylabel("Unique Slots Discovered")
     ax.set_title("Cumulative Rule Discovery")
@@ -320,7 +317,7 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
         activation_rate = activation_matrix[:, slot_idx].mean() * 100
         status = "✓" if activation_rate > 50 else "✗"
         print(f"{slot_labels[slot_idx]}: {activation_rate:5.1f}% {status}")
-    print(f"\nOverall: {int(cumulative_slots[-1])}/8 rules discovered")
+    print(f"\nOverall: {int(cumulative_slots[-1])}/10 rules discovered")
 
 
 def train():

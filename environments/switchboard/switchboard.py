@@ -242,6 +242,32 @@ class RuleBuilder:
 
         return LambdaRule(rule_id, evaluate_fn, reset_fn,
                          description=f"Hold Button {action_idx} for {duration} -> Slot {obs_idx}")
+    
+    @staticmethod
+    def hold_and_combo(action_indices: List[int], obs_idx: int, duration: int, strength: float = 1.0, rule_id: Optional[str] = None):
+        """Hold Button[i] for N steps -> Slot[j]"""
+        rule_id = rule_id or f"hold_{action_indices}_for_{duration}_to_{obs_idx}"
+
+        def evaluate_fn(actions, obs, state, step):
+            update = torch.zeros_like(obs)
+            if 'hold_count' not in state:
+                state['hold_count'] = 0
+
+            all_pressed = all(idx < len(actions) and actions[idx] > 0 for idx in action_indices)
+            if all_pressed:
+                state['hold_count'] += 1
+                if state['hold_count'] >= duration:
+                    update[obs_idx] = strength
+            else:
+                state['hold_count'] = 0
+
+            return update
+
+        def reset_fn(state):
+            state['hold_count'] = 0
+
+        return LambdaRule(rule_id, evaluate_fn, reset_fn,
+                         description=f"Hold Button {action_indices} for {duration} -> Slot {obs_idx}")
 
     @staticmethod
     def toggle(action_idx: int, obs_idx: int, strength: float = 1.0, rule_id: Optional[str] = None):
