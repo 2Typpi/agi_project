@@ -49,20 +49,28 @@ def load_model(agent, optimizer, checkpoint_path, device):
     return global_step, update, episode_returns, episode_slots_activated, slot_activation_history, update_logs
 
 
-def compute_reward(prev_obs, next_obs):
+def compute_reward(prev_obs, next_obs, goal_slots):
     """
-    Reward function: +1 for each newly activated observation slot.
-    This encourages the agent to discover rules and activate slots.
+    Goal-based reward function: +1 only when the current goal slot is activated.
 
     Args:
         prev_obs: Previous observation tensor (num_envs, obs_dim)
         next_obs: Next observation tensor (num_envs, obs_dim)
+        goal_slots: Current goal slot index for each environment (num_envs,)
 
     Returns:
         reward: Reward tensor (num_envs,)
     """
-    newly_activated = ((next_obs > 0.5) & (prev_obs <= 0.5)).float()
-    return newly_activated.sum(dim=-1)
+    num_envs = next_obs.shape[0]
+    rewards = torch.zeros(num_envs, device=next_obs.device)
+
+    for i in range(num_envs):
+        goal_slot = goal_slots[i]
+        # Reward for activating the goal slot
+        if next_obs[i, goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5:
+            rewards[i] = 1.0
+
+    return rewards
 
 
 def plot_results(episode_returns, episode_slots_activated, update_logs, save_dir="./plots"):
@@ -356,6 +364,9 @@ def train():
     obs_dim = 10
     episode_max_steps = 30
 
+    # Goal-based reward settings
+    goal_switch_interval = 64  # Change goal every N steps
+
     # CTM settings
     ctm_d_model = 512
     ctm_latent_dim = obs_dim
@@ -424,6 +435,12 @@ def train():
     next_done = torch.zeros(num_envs).to(device)
     next_state = agent.get_initial_state(num_envs)
 
+    # Initialize goal slots (sequential/cyclic progression)
+    # All environments share the same goal, which cycles through 0->1->2->...->9->0
+    current_goal_slot_idx = 0  # Start with slot 0
+    current_goal_slots = torch.full((num_envs,), current_goal_slot_idx, device=device)
+    steps_since_goal_switch = 0
+
     ep_reward_buf = np.zeros(num_envs)
     ep_slots_buf = [set() for _ in range(num_envs)]
     ep_step_count = np.zeros(num_envs, dtype=int)
@@ -446,6 +463,14 @@ def train():
             obs_buffer[step] = next_obs
             dones[step] = next_done
 
+            # Switch goal slots at regular intervals (sequential/cyclic)
+            if steps_since_goal_switch >= goal_switch_interval:
+                current_goal_slot_idx = (current_goal_slot_idx + 1) % obs_dim
+                current_goal_slots = torch.full((num_envs,), current_goal_slot_idx, device=device)
+                steps_since_goal_switch = 0
+                print(f"  → Goal switched to slot {current_goal_slot_idx}")
+            steps_since_goal_switch += 1
+
             # Store previous observation for reward computation
             prev_obs = next_obs.clone()
 
@@ -467,8 +492,12 @@ def train():
                 observations, _ = env.step(lambda _: action[i])
                 next_obs_i = observations[-1]
 
-                # Compute reward based on newly activated slots
-                reward_i = compute_reward(prev_obs[i:i+1], next_obs_i.unsqueeze(0))
+                # Compute goal-based reward
+                reward_i = compute_reward(
+                    prev_obs[i:i+1],
+                    next_obs_i.unsqueeze(0),
+                    current_goal_slots[i:i+1]
+                )
                 ep_reward_buf[i] += reward_i.item()
 
                 # Track unique slots activated
@@ -597,6 +626,7 @@ def train():
         avg_slots = np.mean([s[1] for s in episode_slots_activated[-100:]]) if episode_slots_activated else 0.0
         print(f"Update {update}/{num_updates}, Step {global_step}, Loss: {loss.item():.4f}, "
               f"EV: {ev.item():.3f}, AvgReward: {avg_reward:.2f}, AvgSlots: {avg_slots:.2f}, "
+              f"Goal: {current_goal_slot_idx}, StepsUntilSwitch: {goal_switch_interval - steps_since_goal_switch}, "
               f"EntCoef: {current_ent_coef:.4f}, SPS: {sps}")
 
         # Periodic checkpoint saving
