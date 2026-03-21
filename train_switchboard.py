@@ -15,7 +15,7 @@ from environments.switchboard.switchboard import Switchboard
 
 
 def save_model(agent, optimizer, global_step, update, episode_returns,
-               episode_slots_activated, slot_activation_history, update_logs, save_path):
+               episode_slots_activated, slot_activation_history, goal_history, update_logs, save_path):
     """Save checkpoint (no external encoder for switchboard)"""
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save({
@@ -26,6 +26,7 @@ def save_model(agent, optimizer, global_step, update, episode_returns,
         'episode_returns': episode_returns,
         'episode_slots_activated': episode_slots_activated,
         'slot_activation_history': slot_activation_history,
+        'goal_history': goal_history,
         'update_logs': update_logs,
     }, save_path)
 
@@ -43,10 +44,11 @@ def load_model(agent, optimizer, checkpoint_path, device):
     episode_returns = checkpoint.get('episode_returns', [])
     episode_slots_activated = checkpoint.get('episode_slots_activated', [])
     slot_activation_history = checkpoint.get('slot_activation_history', [])
+    goal_history = checkpoint.get('goal_history', [])
     update_logs = checkpoint.get('update_logs', [])
 
     print(f"Loaded checkpoint from {checkpoint_path} at update {update}, step {global_step}")
-    return global_step, update, episode_returns, episode_slots_activated, slot_activation_history, update_logs
+    return global_step, update, episode_returns, episode_slots_activated, slot_activation_history, goal_history, update_logs
 
 
 def compute_reward(prev_obs, next_obs, goal_slots):
@@ -193,6 +195,142 @@ def plot_results(episode_returns, episode_slots_activated, update_logs, save_dir
     plt.savefig(pdf_path, bbox_inches='tight')
     plt.close()
     print(f"Plots saved to {png_path} and {pdf_path}")
+
+
+def plot_goal_achievements(goal_history, save_dir="./plots"):
+    """
+    Visualize goal slot activations over training.
+
+    Shows:
+    1. Timeline of which slot is the active goal
+    2. Whether the agent successfully activated the goal slot
+    3. Success rate per goal slot
+
+    Args:
+        goal_history: List of (step, goal_slot, achieved) tuples
+        save_dir: Directory to save plots
+    """
+    if not goal_history:
+        print("No goal history to plot")
+        return
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    steps = np.array([x[0] for x in goal_history])
+    goals = np.array([x[1] for x in goal_history])
+    achieved = np.array([x[2] for x in goal_history])
+
+    try:
+        plt.style.use('seaborn-v0_8-paper')
+    except OSError:
+        plt.style.use('bmh')
+
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig.suptitle("CTM PPO — Goal-Based Learning Analysis", fontsize=14, fontweight='bold')
+
+    # Plot 1: Goal Timeline with Achievement Status
+    ax = axes[0, 0]
+    colors = ['red' if not ach else 'green' for ach in achieved]
+    ax.scatter(steps, goals, c=colors, s=1, alpha=0.5)
+    ax.set_xlabel("Training Steps")
+    ax.set_ylabel("Goal Slot")
+    ax.set_title("Goal Timeline (Green = Achieved, Red = Missed)")
+    ax.set_ylim(-0.5, 9.5)
+    ax.set_yticks(range(10))
+    ax.grid(True, alpha=0.3, axis='both')
+
+    # Plot 2: Success Rate Over Time (Rolling Window)
+    ax = axes[0, 1]
+    window = 1000
+    if len(achieved) >= window:
+        success_rate = np.convolve(achieved.astype(float), np.ones(window)/window, mode='valid')
+        success_steps = steps[window-1:]
+        ax.plot(success_steps, success_rate * 100, color='steelblue', linewidth=2)
+    else:
+        # Cumulative success rate if not enough data
+        cumsum = np.cumsum(achieved)
+        cumcount = np.arange(1, len(achieved) + 1)
+        ax.plot(steps, (cumsum / cumcount) * 100, color='steelblue', linewidth=2)
+    ax.set_xlabel("Training Steps")
+    ax.set_ylabel("Success Rate (%)")
+    ax.set_title(f"Goal Achievement Rate (Rolling {window} steps)")
+    ax.set_ylim(0, 100)
+    ax.grid(True, alpha=0.3)
+    ax.axhline(50, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    # Plot 3: Success Rate Per Goal Slot
+    ax = axes[1, 0]
+    slot_success = []
+    for slot_idx in range(10):
+        mask = goals == slot_idx
+        if mask.sum() > 0:
+            success = achieved[mask].mean() * 100
+        else:
+            success = 0
+        slot_success.append(success)
+
+    bars = ax.bar(range(10), slot_success, color='steelblue', alpha=0.7)
+    for i, bar in enumerate(bars):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 2,
+               f'{height:.1f}%', ha='center', va='bottom', fontsize=9)
+
+    ax.set_xlabel("Goal Slot")
+    ax.set_ylabel("Success Rate (%)")
+    ax.set_title("Success Rate by Goal Slot")
+    ax.set_ylim(0, 105)
+    ax.set_xticks(range(10))
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.axhline(50, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    # Plot 4: Goal Slot Frequency Heatmap
+    ax = axes[1, 1]
+    num_windows = 10
+    max_step = steps[-1] if len(steps) > 0 else 100000
+    window_edges = np.linspace(0, max_step, num_windows + 1)
+
+    heatmap_data = np.zeros((10, num_windows))
+    for window_idx in range(num_windows):
+        window_mask = (steps >= window_edges[window_idx]) & (steps < window_edges[window_idx + 1])
+        if window_mask.sum() > 0:
+            for slot_idx in range(10):
+                slot_mask = (goals == slot_idx) & window_mask
+                if slot_mask.sum() > 0:
+                    heatmap_data[slot_idx, window_idx] = achieved[slot_mask].mean() * 100
+
+    im = ax.imshow(heatmap_data, aspect='auto', cmap='RdYlGn', vmin=0, vmax=100)
+    ax.set_xlabel("Training Progress")
+    ax.set_ylabel("Goal Slot")
+    ax.set_title("Goal Achievement Rate Over Time (%)")
+    ax.set_yticks(range(10))
+    ax.set_xticks(range(num_windows))
+    ax.set_xticklabels([f"{int(window_edges[i]/1000)}k" for i in range(num_windows)],
+                       rotation=45, ha='right', fontsize=8)
+
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Success %', rotation=270, labelpad=15)
+
+    plt.tight_layout()
+    png_path = os.path.join(save_dir, "goal_achievements.png")
+    pdf_path = os.path.join(save_dir, "goal_achievements.pdf")
+    plt.savefig(png_path, dpi=200, bbox_inches='tight')
+    plt.savefig(pdf_path, bbox_inches='tight')
+    plt.close()
+
+    print(f"Goal achievement plots saved to {png_path} and {pdf_path}")
+
+    # Print summary statistics
+    overall_success = achieved.mean() * 100
+    print(f"\n=== Goal Achievement Report ===")
+    print(f"Overall Success Rate: {overall_success:.1f}%")
+    print("\nPer-Slot Success Rates:")
+    for slot_idx in range(10):
+        mask = goals == slot_idx
+        if mask.sum() > 0:
+            success = achieved[mask].mean() * 100
+            count = mask.sum()
+            status = "✓" if success > 50 else "✗"
+            print(f"  Slot {slot_idx}: {success:5.1f}% ({count:6d} attempts) {status}")
 
 
 def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
@@ -415,10 +553,11 @@ def train():
     episode_returns = []
     episode_slots_activated = []
     slot_activation_history = []
+    goal_history = []
     update_logs = []
 
     if os.path.exists(checkpoint_path):
-        global_step, start_update, episode_returns, episode_slots_activated, slot_activation_history, update_logs = \
+        global_step, start_update, episode_returns, episode_slots_activated, slot_activation_history, goal_history, update_logs = \
             load_model(agent, optimizer, checkpoint_path, device)
     else:
         print("No checkpoint found, starting fresh.")
@@ -499,6 +638,11 @@ def train():
                     current_goal_slots[i:i+1]
                 )
                 ep_reward_buf[i] += reward_i.item()
+
+                # Track goal achievements
+                goal_slot = current_goal_slots[i].item()
+                goal_achieved = (next_obs_i[goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5)
+                goal_history.append((global_step, goal_slot, goal_achieved))
 
                 # Track unique slots activated
                 active_slots = (next_obs_i > 0.5).nonzero(as_tuple=True)[0]
@@ -633,9 +777,10 @@ def train():
         if save_interval > 0 and update % save_interval == 0:
             print(f"Saving checkpoint at update {update}...")
             save_model(agent, optimizer, global_step, update, episode_returns,
-                       episode_slots_activated, slot_activation_history, update_logs, checkpoint_path)
+                       episode_slots_activated, slot_activation_history, goal_history, update_logs, checkpoint_path)
             plot_results(episode_returns, episode_slots_activated, update_logs)
             plot_slot_discovery(slot_activation_history)
+            plot_goal_achievements(goal_history)
 
     total_time = time.time() - start_time
     hours = int(total_time // 3600)
@@ -645,10 +790,11 @@ def train():
     print(f"\nTraining completed in {hours}h {minutes}m {seconds}s")
     print(f"Saving final checkpoint...")
     save_model(agent, optimizer, global_step, update, episode_returns,
-               episode_slots_activated, slot_activation_history, update_logs, checkpoint_path)
+               episode_slots_activated, slot_activation_history, goal_history, update_logs, checkpoint_path)
 
     plot_results(episode_returns, episode_slots_activated, update_logs)
     plot_slot_discovery(slot_activation_history)
+    plot_goal_achievements(goal_history)
 
 
 if __name__ == '__main__':
