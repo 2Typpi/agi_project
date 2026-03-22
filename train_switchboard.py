@@ -96,17 +96,17 @@ def compute_reward(prev_obs, next_obs, goal_slots, actions):
         if next_obs[i, goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5:
             rewards[i] = 1.0
         else:
-            # Reward for taking correct actions toward the goal
+            # Small reward for taking correct actions toward the goal (reduced to prevent exploitation)
             correct_actions = goal_action_map.get(goal_slot, [])
             if correct_actions:
                 # Check if agent pressed any correct button
                 correct_action_taken = any(actions[i, act_idx] > 0.5 for act_idx in correct_actions)
                 if correct_action_taken:
-                    rewards[i] += 0.1
+                    rewards[i] += 0.02  # Reduced from 0.1 to prevent reward hacking
 
-            # Small exploration bonus for discovering new slots
+            # Tiny exploration bonus for discovering new slots
             newly_activated = ((next_obs[i] > 0.5) & (prev_obs[i] <= 0.5)).sum()
-            rewards[i] += 0.02 * newly_activated.item()
+            rewards[i] += 0.01 * newly_activated.item()  # Reduced from 0.02
 
     return rewards
 
@@ -517,7 +517,7 @@ def train():
     # Environment settings
     action_dim = 10
     obs_dim = 10
-    episode_max_steps = 30
+    episode_max_steps = 50  # Increased from 30 to allow time for 15-step hold rules
 
     # Goal-based reward settings
     goal_switch_interval = 256  # Change goal every N steps (increased for long-delay rules)
@@ -582,6 +582,9 @@ def train():
     total_time_steps = 1_000_000
     num_updates = total_time_steps // (num_steps * num_envs)
 
+    phase2_threshold = int(0.2 * total_time_steps)
+    phase3_threshold = int(0.4 * total_time_steps)
+
     batch_size = num_envs * num_steps
 
     start_time = time.time()
@@ -591,10 +594,11 @@ def train():
     next_done = torch.zeros(num_envs).to(device)
     next_state = agent.get_initial_state(num_envs)
 
-    # Initialize goal slots (sequential/cyclic progression)
-    # All environments share the same goal, which cycles through 0->1->2->...->9->0
-    current_goal_slot_idx = 0  # Start with slot 0
-    current_goal_slots = torch.full((num_envs,), current_goal_slot_idx, device=device)
+    # Initialize goal slots with curriculum learning
+    # Start with easy goals (0-3), gradually introduce harder ones
+    available_goal_slots = [0, 2, 3]  # Start with easiest goals
+    current_goal_slot_idx = 0
+    current_goal_slots = torch.full((num_envs,), available_goal_slots[current_goal_slot_idx], device=device)
     steps_since_goal_switch = 0
 
     ep_reward_buf = np.zeros(num_envs)
@@ -603,6 +607,17 @@ def train():
 
     for update in range(start_update + 1, num_updates + 1):
         current_ent_coef = ent_coef * max(0.2, 1.0 - (update / num_updates) * 0.8)
+
+        # Curriculum: expand available goals over time
+        if global_step >= phase3_threshold and len(available_goal_slots) < 10:
+            # Phase 3: Add long holds (slots 7-9)
+            available_goal_slots = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            print(f"Curriculum Phase 3: All goals available (slots 0-9)")
+        elif global_step >= phase2_threshold and len(available_goal_slots) < 7:
+            # Phase 2: Add medium complexity (slots 1, 4-6)
+            available_goal_slots = [0, 1, 2, 3, 4, 5, 6]
+            print(f"Curriculum Phase 2: Medium goals available (slots 0-6)")
+        # Phase 1: Start with [0, 2, 3] as initialized above
 
         obs_buffer = torch.zeros((num_steps, num_envs, obs_dim)).to(device)
         actions = torch.zeros((num_steps, num_envs, action_dim)).to(device)
@@ -619,12 +634,13 @@ def train():
             obs_buffer[step] = next_obs
             dones[step] = next_done
 
-            # Switch goal slots at regular intervals (sequential/cyclic)
+            # Switch goal slots at regular intervals (cycling through available goals)
             if steps_since_goal_switch >= goal_switch_interval:
-                current_goal_slot_idx = (current_goal_slot_idx + 1) % obs_dim
-                current_goal_slots = torch.full((num_envs,), current_goal_slot_idx, device=device)
+                current_goal_slot_idx = (current_goal_slot_idx + 1) % len(available_goal_slots)
+                actual_goal_slot = available_goal_slots[current_goal_slot_idx]
+                current_goal_slots = torch.full((num_envs,), actual_goal_slot, device=device)
                 steps_since_goal_switch = 0
-                print(f"  → Goal switched to slot {current_goal_slot_idx}")
+                print(f"  → Goal switched to slot {actual_goal_slot}")
             steps_since_goal_switch += 1
 
             # Store previous observation for reward computation
