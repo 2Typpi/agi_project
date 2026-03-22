@@ -51,18 +51,22 @@ def load_model(agent, optimizer, checkpoint_path, device):
     return global_step, update, episode_returns, episode_slots_activated, slot_activation_history, goal_history, update_logs
 
 
-def compute_reward(prev_obs, next_obs, goal_slots):
+def compute_reward(prev_obs, next_obs, goal_slots, actions):
     """
-    Goal-based reward function with exploration bonus.
+    Goal-based reward with action guidance for temporal rules.
 
-    Rewards:
-    - +1.0 for achieving the goal slot
-    - +0.05 per newly activated slot (exploration bonus)
+    Rewards the agent for:
+    1. Achieving the goal slot: +1.0
+    2. Taking correct actions for the current goal: +0.1 per step
+    3. Exploration bonus: +0.02 per newly activated slot
+
+    This helps bridge the temporal credit assignment gap for delayed/hold rules.
 
     Args:
         prev_obs: Previous observation tensor (num_envs, obs_dim)
         next_obs: Next observation tensor (num_envs, obs_dim)
         goal_slots: Current goal slot index for each environment (num_envs,)
+        actions: Action tensor (num_envs, action_dim)
 
     Returns:
         reward: Reward tensor (num_envs,)
@@ -70,16 +74,39 @@ def compute_reward(prev_obs, next_obs, goal_slots):
     num_envs = next_obs.shape[0]
     rewards = torch.zeros(num_envs, device=next_obs.device)
 
+    # Define which actions are "correct" for each goal slot
+    # Based on temporal_ppo scenario rules
+    goal_action_map = {
+        0: [0],           # Direct button 0
+        1: [1, 8],        # Hold buttons 1+8
+        2: [2],           # Button 2 (3-step delay)
+        3: [3],           # Button 3 (5-step delay)
+        4: [4],           # Button 4 (8-step delay)
+        5: [5, 6],        # AND buttons 5+6
+        6: [7, 8, 9],     # Sequence 7→8→9
+        7: [9],           # Hold button 9
+        8: [6],           # Hold button 6 (3 steps)
+        9: [6],           # Hold button 6 (15 steps)
+    }
+
     for i in range(num_envs):
-        goal_slot = goal_slots[i]
+        goal_slot = goal_slots[i].item()
 
         # Big reward for activating the goal slot
         if next_obs[i, goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5:
             rewards[i] = 1.0
         else:
-            # Small exploration bonus for any newly activated slot
+            # Reward for taking correct actions toward the goal
+            correct_actions = goal_action_map.get(goal_slot, [])
+            if correct_actions:
+                # Check if agent pressed any correct button
+                correct_action_taken = any(actions[i, act_idx] > 0.5 for act_idx in correct_actions)
+                if correct_action_taken:
+                    rewards[i] += 0.1
+
+            # Small exploration bonus for discovering new slots
             newly_activated = ((next_obs[i] > 0.5) & (prev_obs[i] <= 0.5)).sum()
-            rewards[i] = 0.05 * newly_activated.item()
+            rewards[i] += 0.02 * newly_activated.item()
 
     return rewards
 
@@ -625,7 +652,8 @@ def train():
                 reward_i = compute_reward(
                     prev_obs[i:i+1],
                     next_obs_i.unsqueeze(0),
-                    current_goal_slots[i:i+1]
+                    current_goal_slots[i:i+1],
+                    action[i:i+1]
                 )
                 ep_reward_buf[i] += reward_i.item()
 
