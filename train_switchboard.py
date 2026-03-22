@@ -53,7 +53,11 @@ def load_model(agent, optimizer, checkpoint_path, device):
 
 def compute_reward(prev_obs, next_obs, goal_slots):
     """
-    Goal-based reward function: +1 only when the current goal slot is activated.
+    Goal-based reward function with exploration bonus.
+
+    Rewards:
+    - +1.0 for achieving the goal slot
+    - +0.05 per newly activated slot (exploration bonus)
 
     Args:
         prev_obs: Previous observation tensor (num_envs, obs_dim)
@@ -68,9 +72,14 @@ def compute_reward(prev_obs, next_obs, goal_slots):
 
     for i in range(num_envs):
         goal_slot = goal_slots[i]
-        # Reward for activating the goal slot
+
+        # Big reward for activating the goal slot
         if next_obs[i, goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5:
             rewards[i] = 1.0
+        else:
+            # Small exploration bonus for any newly activated slot
+            newly_activated = ((next_obs[i] > 0.5) & (prev_obs[i] <= 0.5)).sum()
+            rewards[i] = 0.05 * newly_activated.item()
 
     return rewards
 
@@ -288,6 +297,8 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
     num_windows = 10
     max_step = steps[-1] if len(steps) > 0 else 100000
     window_edges = np.linspace(0, max_step, num_windows + 1)
+    window_centers = (window_edges[:-1] + window_edges[1:]) / 2
+
 
     heatmap_data = np.zeros((10, num_windows))
     for window_idx in range(num_windows):
@@ -298,13 +309,13 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
                 if slot_mask.sum() > 0:
                     heatmap_data[slot_idx, window_idx] = achieved[slot_mask].mean() * 100
 
-    im = ax.imshow(heatmap_data, aspect='auto', cmap='RdYlGn', vmin=0, vmax=100)
+    im = ax.imshow(heatmap_data, aspect='auto', cmap='YlOrRd', vmin=0, vmax=100)
     ax.set_xlabel("Training Progress")
     ax.set_ylabel("Goal Slot")
     ax.set_title("Goal Achievement Rate Over Time (%)")
     ax.set_yticks(range(10))
     ax.set_xticks(range(num_windows))
-    ax.set_xticklabels([f"{int(window_edges[i]/1000)}k" for i in range(num_windows)],
+    ax.set_xticklabels([f"{int(window_centers[i]/1000)}k" for i in range(num_windows)],
                        rotation=45, ha='right', fontsize=8)
 
     cbar = plt.colorbar(im, ax=ax)
@@ -429,25 +440,6 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label('Activation %', rotation=270, labelpad=15)
 
-    # Plot 3: Cumulative Discovery
-    ax = axes[2]
-
-    # Compute cumulative unique slots discovered
-    cumulative_slots = np.zeros(num_episodes)
-    discovered = set()
-    for ep_idx, slots in enumerate(all_slot_sets):
-        discovered.update(slots)
-        cumulative_slots[ep_idx] = len(discovered)
-
-    ax.plot(all_steps, cumulative_slots, color='steelblue', linewidth=2)
-    ax.axhline(10, color='red', linestyle='--', linewidth=1, alpha=0.6, label='Theoretical Max (10 rules)')
-    ax.set_xlabel("Training Steps")
-    ax.set_ylabel("Unique Slots Discovered")
-    ax.set_title("Cumulative Rule Discovery")
-    ax.set_ylim(0, 10)
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3)
-
     plt.tight_layout()
     png_path = os.path.join(save_dir, "slot_discovery.png")
     pdf_path = os.path.join(save_dir, "slot_discovery.pdf")
@@ -463,8 +455,6 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
         activation_rate = activation_matrix[:, slot_idx].mean() * 100
         status = "✓" if activation_rate > 50 else "✗"
         print(f"{slot_labels[slot_idx]}: {activation_rate:5.1f}% {status}")
-    print(f"\nOverall: {int(cumulative_slots[-1])}/10 rules discovered")
-
 
 def train():
     # Configure device
@@ -503,7 +493,7 @@ def train():
     episode_max_steps = 30
 
     # Goal-based reward settings
-    goal_switch_interval = 64  # Change goal every N steps
+    goal_switch_interval = 256  # Change goal every N steps (increased for long-delay rules)
 
     # CTM settings
     ctm_d_model = 512
