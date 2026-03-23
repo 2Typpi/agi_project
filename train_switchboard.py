@@ -111,7 +111,7 @@ def compute_reward(prev_obs, next_obs, goal_slots, actions):
     return rewards
 
 
-def plot_results(episode_returns, episode_slots_activated, update_logs, save_dir="./plots"):
+def plot_results(episode_returns, episode_slots_activated, update_logs, save_dir="./plots/newRun"):
     """Generate training curves for switchboard training."""
     os.makedirs(save_dir, exist_ok=True)
 
@@ -233,7 +233,7 @@ def plot_results(episode_returns, episode_slots_activated, update_logs, save_dir
     print(f"Plots saved to {png_path} and {pdf_path}")
 
 
-def plot_goal_achievements(goal_history, save_dir="./plots"):
+def plot_goal_achievements(goal_history, slot_activation_history, save_dir="./plots/newRun"):
     """
     Visualize goal slot activations over training.
 
@@ -241,9 +241,11 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
     1. Timeline of which slot is the active goal
     2. Whether the agent successfully activated the goal slot
     3. Success rate per goal slot
+    4. Goal-directed behavior: activation rate when slot IS goal vs when NOT goal
 
     Args:
         goal_history: List of (step, goal_slot, achieved) tuples
+        slot_activation_history: List of (step, [activated_slots]) tuples
         save_dir: Directory to save plots
     """
     if not goal_history:
@@ -261,7 +263,7 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
     except OSError:
         plt.style.use('bmh')
 
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
     fig.suptitle("CTM PPO — Goal-Based Learning Analysis", fontsize=14, fontweight='bold')
 
     # Plot 1: Goal Timeline with Achievement Status
@@ -294,7 +296,65 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
     ax.grid(True, alpha=0.3)
     ax.axhline(50, color='gray', linestyle='--', linewidth=1, alpha=0.5)
 
-    # Plot 3: Success Rate Per Goal Slot
+    # Plot 3: Goal-Directed Behavior Analysis
+    ax = axes[0, 2]
+
+    # Align goal_history and slot_activation_history by episode count
+    # Both should have same length (one entry per episode)
+    if len(goal_history) == len(slot_activation_history):
+        slot_when_goal = {i: [] for i in range(10)}  # activation when slot i IS the goal
+        slot_when_not_goal = {i: [] for i in range(10)}  # activation when slot i is NOT the goal
+
+        for (_, goal_slot, _), (_, activated_slots) in zip(goal_history, slot_activation_history):
+            for slot_idx in range(10):
+                was_activated = slot_idx in activated_slots
+                if slot_idx == goal_slot:
+                    slot_when_goal[slot_idx].append(was_activated)
+                else:
+                    slot_when_not_goal[slot_idx].append(was_activated)
+
+        # Calculate activation rates
+        goal_rates = []
+        non_goal_rates = []
+        for slot_idx in range(10):
+            if len(slot_when_goal[slot_idx]) > 0:
+                goal_rate = np.mean(slot_when_goal[slot_idx]) * 100
+            else:
+                goal_rate = 0
+
+            if len(slot_when_not_goal[slot_idx]) > 0:
+                non_goal_rate = np.mean(slot_when_not_goal[slot_idx]) * 100
+            else:
+                non_goal_rate = 0
+
+            goal_rates.append(goal_rate)
+            non_goal_rates.append(non_goal_rate)
+
+        x = np.arange(10)
+        width = 0.35
+
+        bars1 = ax.bar(x - width/2, goal_rates, width, label='When Goal', color='steelblue', alpha=0.8)
+        bars2 = ax.bar(x + width/2, non_goal_rates, width, label='When Not Goal', color='coral', alpha=0.8)
+
+        ax.set_xlabel("Slot")
+        ax.set_ylabel("Activation Rate (%)")
+        ax.set_title("Goal-Directed Behavior\n(Higher gap = better learning)")
+        ax.set_xticks(x)
+        ax.set_ylim(0, 105)
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.axhline(50, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
+
+        # Add gap values on top
+        for i, (g_rate, ng_rate) in enumerate(zip(goal_rates, non_goal_rates)):
+            gap = g_rate - ng_rate
+            if gap > 5:  # Only show significant gaps
+                ax.text(i, max(g_rate, ng_rate) + 3, f'+{gap:.0f}',
+                       ha='center', va='bottom', fontsize=8, fontweight='bold', color='green')
+    else:
+        ax.text(0.5, 0.5, "History mismatch", ha='center', va='center', transform=ax.transAxes)
+
+    # Plot 4: Success Rate Per Goal Slot
     ax = axes[1, 0]
     slot_success = []
     for slot_idx in range(10):
@@ -319,7 +379,7 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(50, color='gray', linestyle='--', linewidth=1, alpha=0.5)
 
-    # Plot 4: Goal Slot Frequency Heatmap
+    # Plot 5: Goal Slot Frequency Heatmap
     ax = axes[1, 1]
     num_windows = 10
     max_step = steps[-1] if len(steps) > 0 else 100000
@@ -348,6 +408,41 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label('Success %', rotation=270, labelpad=15)
 
+    # Plot 6: Learning Progress - Gap Over Time
+    ax = axes[1, 2]
+    if len(goal_history) == len(slot_activation_history) and len(goal_history) > 200:
+        # Calculate goal-directed gap over time (rolling window)
+        window = min(100, len(goal_history) // 5)
+        gaps_over_time = []
+        steps_for_gaps = []
+
+        for i in range(window, len(goal_history)):
+            window_goal_history = goal_history[i-window:i]
+            window_slot_history = slot_activation_history[i-window:i]
+
+            # Calculate average gap for this window
+            window_gaps = []
+            for (_, goal_slot, _), (_, activated_slots) in zip(window_goal_history, window_slot_history):
+                was_activated = goal_slot in activated_slots
+                window_gaps.append(1.0 if was_activated else 0.0)
+
+            avg_gap = np.mean(window_gaps) * 100
+            gaps_over_time.append(avg_gap)
+            steps_for_gaps.append(steps[i])
+
+        ax.plot(steps_for_gaps, gaps_over_time, color='darkgreen', linewidth=2)
+        ax.fill_between(steps_for_gaps, gaps_over_time, 50, alpha=0.2, color='green',
+                        where=np.array(gaps_over_time) > 50)
+        ax.axhline(50, color='gray', linestyle='--', linewidth=1, alpha=0.5, label='Random baseline')
+        ax.set_xlabel("Training Steps")
+        ax.set_ylabel("Goal Achievement Rate (%)")
+        ax.set_title(f"Learning Progress\n(Rolling {window} episodes)")
+        ax.set_ylim(0, 100)
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(0.5, 0.5, "Insufficient data", ha='center', va='center', transform=ax.transAxes)
+
     plt.tight_layout()
     png_path = os.path.join(save_dir, "goal_achievements.png")
     pdf_path = os.path.join(save_dir, "goal_achievements.pdf")
@@ -370,8 +465,45 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
             status = "✓" if success > 50 else "✗"
             print(f"  Slot {slot_idx}: {success:5.1f}% ({count:6d} attempts) {status}")
 
+    # Print goal-directed behavior analysis
+    if len(goal_history) == len(slot_activation_history):
+        print(f"\n=== Goal-Directed Behavior Analysis ===")
+        print("(Higher gap = better learning)")
+        print(f"{'Slot':<6} {'When Goal':<12} {'When NOT Goal':<15} {'Gap':<8} {'Status'}")
+        print("-" * 60)
 
-def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
+        slot_when_goal = {i: [] for i in range(10)}
+        slot_when_not_goal = {i: [] for i in range(10)}
+
+        for (_, goal_slot, _), (_, activated_slots) in zip(goal_history, slot_activation_history):
+            for slot_idx in range(10):
+                was_activated = slot_idx in activated_slots
+                if slot_idx == goal_slot:
+                    slot_when_goal[slot_idx].append(was_activated)
+                else:
+                    slot_when_not_goal[slot_idx].append(was_activated)
+
+        for slot_idx in range(10):
+            if len(slot_when_goal[slot_idx]) > 0:
+                goal_rate = np.mean(slot_when_goal[slot_idx]) * 100
+                count_goal = len(slot_when_goal[slot_idx])
+            else:
+                goal_rate = 0
+                count_goal = 0
+
+            if len(slot_when_not_goal[slot_idx]) > 0:
+                non_goal_rate = np.mean(slot_when_not_goal[slot_idx]) * 100
+            else:
+                non_goal_rate = 0
+
+            gap = goal_rate - non_goal_rate
+            status = "✓✓" if gap > 30 else ("✓" if gap > 15 else ("~" if gap > 5 else "✗"))
+
+            print(f"{slot_idx:<6} {goal_rate:>5.1f}% ({count_goal:>4})  {non_goal_rate:>5.1f}%            "
+                  f"{gap:>+6.1f}%  {status}")
+
+
+def plot_slot_discovery(slot_activation_history, save_dir="./plots/newRun"):
     """
     Generate per-slot activation visualizations showing which rules were discovered.
 
@@ -821,7 +953,7 @@ def train():
                        episode_slots_activated, slot_activation_history, goal_history, update_logs, checkpoint_path)
             plot_results(episode_returns, episode_slots_activated, update_logs)
             plot_slot_discovery(slot_activation_history)
-            plot_goal_achievements(goal_history)
+            plot_goal_achievements(goal_history, slot_activation_history)
 
     total_time = time.time() - start_time
     hours = int(total_time // 3600)
@@ -835,7 +967,7 @@ def train():
 
     plot_results(episode_returns, episode_slots_activated, update_logs)
     plot_slot_discovery(slot_activation_history)
-    plot_goal_achievements(goal_history)
+    plot_goal_achievements(goal_history, slot_activation_history)
 
 
 if __name__ == '__main__':
