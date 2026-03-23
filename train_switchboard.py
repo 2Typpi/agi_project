@@ -277,7 +277,7 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
 
     # Plot 2: Success Rate Over Time (Rolling Window)
     ax = axes[0, 1]
-    window = 1000
+    window = min(100, len(achieved))  # Rolling window of 100 episodes (was 1000 steps)
     if len(achieved) >= window:
         success_rate = np.convolve(achieved.astype(float), np.ones(window)/window, mode='valid')
         success_steps = steps[window-1:]
@@ -289,7 +289,7 @@ def plot_goal_achievements(goal_history, save_dir="./plots"):
         ax.plot(steps, (cumsum / cumcount) * 100, color='steelblue', linewidth=2)
     ax.set_xlabel("Training Steps")
     ax.set_ylabel("Success Rate (%)")
-    ax.set_title(f"Goal Achievement Rate (Rolling {window} steps)")
+    ax.set_title(f"Goal Achievement Rate (Rolling {window} episodes)")
     ax.set_ylim(0, 100)
     ax.grid(True, alpha=0.3)
     ax.axhline(50, color='gray', linestyle='--', linewidth=1, alpha=0.5)
@@ -414,7 +414,7 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots"):
     except OSError:
         plt.style.use('bmh')
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(18, 5))
     fig.suptitle("CTM PPO — Slot Discovery Analysis", fontsize=14, fontweight='bold')
 
     # Plot 1: Slot Activation Timeline (Scatter)
@@ -594,9 +594,7 @@ def train():
     next_done = torch.zeros(num_envs).to(device)
     next_state = agent.get_initial_state(num_envs)
 
-    # Initialize goal slots with curriculum learning
-    # Start with easy goals (0-3), gradually introduce harder ones
-    available_goal_slots = [0, 2, 3]  # Start with easiest goals
+    available_goal_slots = [0, 2, 3]
     current_goal_slot_idx = 0
     current_goal_slots = torch.full((num_envs,), available_goal_slots[current_goal_slot_idx], device=device)
     steps_since_goal_switch = 0
@@ -604,6 +602,8 @@ def train():
     ep_reward_buf = np.zeros(num_envs)
     ep_slots_buf = [set() for _ in range(num_envs)]
     ep_step_count = np.zeros(num_envs, dtype=int)
+    ep_goal_achieved = np.zeros(num_envs, dtype=bool)
+    ep_goal_slot = current_goal_slots.cpu().numpy()
 
     for update in range(start_update + 1, num_updates + 1):
         current_ent_coef = ent_coef * max(0.2, 1.0 - (update / num_updates) * 0.8)
@@ -673,10 +673,10 @@ def train():
                 )
                 ep_reward_buf[i] += reward_i.item()
 
-                # Track goal achievements
+                # Track if goal was achieved this step (mark episode as successful)
                 goal_slot = current_goal_slots[i].item()
-                goal_achieved = (next_obs_i[goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5)
-                goal_history.append((global_step, goal_slot, goal_achieved))
+                if next_obs_i[goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5:
+                    ep_goal_achieved[i] = True  # Mark episode as successful
 
                 # Track unique slots activated
                 active_slots = (next_obs_i > 0.5).nonzero(as_tuple=True)[0]
@@ -691,9 +691,16 @@ def train():
                     episode_returns.append((global_step, ep_reward_buf[i]))
                     episode_slots_activated.append((global_step, len(ep_slots_buf[i])))
                     slot_activation_history.append((global_step, sorted(list(ep_slots_buf[i]))))
+
+                    # Record goal achievement for this episode
+                    goal_history.append((global_step, ep_goal_slot[i], ep_goal_achieved[i]))
+
+                    # Reset episode tracking
                     ep_reward_buf[i] = 0.0
                     ep_slots_buf[i] = set()
                     ep_step_count[i] = 0
+                    ep_goal_achieved[i] = False
+                    ep_goal_slot[i] = current_goal_slots[i].item()  # Update goal for new episode
                     next_obs_i = env.reset()
 
                 new_obs_list.append(next_obs_i)
