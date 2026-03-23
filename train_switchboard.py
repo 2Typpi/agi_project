@@ -96,17 +96,17 @@ def compute_reward(prev_obs, next_obs, goal_slots, actions):
         if next_obs[i, goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5:
             rewards[i] = 1.0
         else:
-            # Small reward for taking correct actions toward the goal (reduced to prevent exploitation)
+            # Sparse shaping: small reward for correct actions, small penalty for wrong actions
             correct_actions = goal_action_map.get(goal_slot, [])
-            if correct_actions:
-                # Check if agent pressed any correct button
-                correct_action_taken = any(actions[i, act_idx] > 0.5 for act_idx in correct_actions)
-                if correct_action_taken:
-                    rewards[i] += 0.02  # Reduced from 0.1 to prevent reward hacking
 
-            # Tiny exploration bonus for discovering new slots
-            newly_activated = ((next_obs[i] > 0.5) & (prev_obs[i] <= 0.5)).sum()
-            rewards[i] += 0.01 * newly_activated.item()  # Reduced from 0.02
+            if correct_actions:
+                num_correct_pressed = sum(1 for act_idx in correct_actions if actions[i, act_idx] > 0.5)
+                num_wrong_pressed = sum(1 for act_idx in range(actions.shape[1])
+                                       if act_idx not in correct_actions and actions[i, act_idx] > 0.5)
+
+                # Net reward: encourage correct actions, discourage wrong ones
+                rewards[i] += 0.05 * num_correct_pressed  # Reward for pressing right buttons
+                rewards[i] -= 0.02 * num_wrong_pressed     # Penalty for pressing wrong buttons
 
     return rewards
 
