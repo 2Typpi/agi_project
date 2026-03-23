@@ -264,8 +264,6 @@ def train():
     ep_reward_buf = np.zeros(num_envs)
 
     for update in range(start_update + 1, num_updates + 1):
-        current_ent_coef = ent_coef * max(0.2, 1.0 - (update / num_updates) * 0.8)
-
         # --- Data Collection ---
         raw_obs = torch.zeros((num_steps, num_envs, 1, height, width)).to(device)
         actions = torch.zeros((num_steps, num_envs)).to(device)
@@ -393,7 +391,7 @@ def train():
                     v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - current_ent_coef * entropy_loss + v_loss * vf_coef
+                loss = pg_loss - entropy_loss + v_loss * vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -417,7 +415,7 @@ def train():
 
         sps = int(global_step / (time.time() - start_time))
         print(f"Update {update}/{num_updates}, Step {global_step}, Loss: {loss.item():.4f}, "
-              f"EV: {ev.item():.3f}, EntCoef: {current_ent_coef:.4f}, SPS: {sps}, Wins: {total_wins}")
+              f"EV: {ev.item():.3f}, SPS: {sps}, Wins: {total_wins}")
 
         # Periodic checkpoint saving
         if save_interval > 0 and update % save_interval == 0:
