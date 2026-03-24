@@ -185,10 +185,10 @@ def train():
 
     # --- Training Hyperparameters ---
     num_steps = 128
-    num_envs = 16
+    num_envs = 8
     num_minibatches = 4
     update_epochs = 4
-    lr = 1e-4
+    lr = 3e-4
     save_interval = 100
 
     # Reward and Advantage Estimation
@@ -197,15 +197,14 @@ def train():
 
     # Loss Coefficients
     norm_adv = True
-    ent_coef = 0.05
     clip_vloss = True
     clip_coef = 0.2
     vf_coef = 0.5
 
     # CTM & Env specific
     ctm_latent_dim = 256
-    width = 6
-    height = 6
+    width = 4
+    height = 4
     n_mines = 4
 
     # --- Environment Setup ---
