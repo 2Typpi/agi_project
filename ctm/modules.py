@@ -206,7 +206,7 @@ class SuperLinear(nn.Module):
         # b1 shape: (1, d_model, out_dims)
         self.register_parameter('b1', nn.Parameter(torch.zeros((1, N, out_dims)), requires_grad=True))
         # Learnable temperature/scaler T
-        self.register_parameter('T', nn.Parameter(torch.Tensor([T]))) 
+        self.register_parameter('T', nn.Parameter(torch.tensor([T]))) 
 
     def forward(self, x):
         """
