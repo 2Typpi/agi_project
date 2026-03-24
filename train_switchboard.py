@@ -75,7 +75,6 @@ def compute_reward(prev_obs, next_obs, goal_slots, actions):
     rewards = torch.zeros(num_envs, device=next_obs.device)
 
     # Define which actions are "correct" for each goal slot
-    # Based on temporal_ppo scenario rules
     goal_action_map = {
         0: [0],           # Direct button 0
         1: [1, 8],        # Hold buttons 1+8
@@ -649,10 +648,10 @@ def train():
     # Environment settings
     action_dim = 10
     obs_dim = 10
-    episode_max_steps = 50  # Increased from 30 to allow time for 15-step hold rules
+    episode_max_steps = 50
 
     # Goal-based reward settings
-    goal_switch_interval = 256  # Change goal every N steps (increased for long-delay rules)
+    goal_switch_interval = 256 
 
     # CTM settings
     ctm_d_model = 512
@@ -772,7 +771,7 @@ def train():
                 actual_goal_slot = available_goal_slots[current_goal_slot_idx]
                 current_goal_slots = torch.full((num_envs,), actual_goal_slot, device=device)
                 steps_since_goal_switch = 0
-                print(f"  → Goal switched to slot {actual_goal_slot}")
+                print(f" -> Goal switched to slot {actual_goal_slot}")
             steps_since_goal_switch += 1
 
             # Store previous observation for reward computation
@@ -808,7 +807,7 @@ def train():
                 # Track if goal was achieved this step (mark episode as successful)
                 goal_slot = current_goal_slots[i].item()
                 if next_obs_i[goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5:
-                    ep_goal_achieved[i] = True  # Mark episode as successful
+                    ep_goal_achieved[i] = True
 
                 # Track unique slots activated
                 active_slots = (next_obs_i > 0.5).nonzero(as_tuple=True)[0]
@@ -832,7 +831,7 @@ def train():
                     ep_slots_buf[i] = set()
                     ep_step_count[i] = 0
                     ep_goal_achieved[i] = False
-                    ep_goal_slot[i] = current_goal_slots[i].item()  # Update goal for new episode
+                    ep_goal_slot[i] = current_goal_slots[i].item()
                     next_obs_i = env.reset()
 
                 new_obs_list.append(next_obs_i)
@@ -844,7 +843,6 @@ def train():
             next_obs = torch.stack(new_obs_list).to(device)
 
         print("Start learning")
-        # --- Learning ---
         with torch.no_grad():
             next_value = agent.get_value(next_obs, next_state, next_done).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
