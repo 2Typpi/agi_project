@@ -71,9 +71,9 @@ def plot_results(episode_returns, episode_wins, update_logs, save_dir="./plots")
         plt.style.use('bmh')
 
     EP_WINDOW = 100
-    UPD_WINDOW = 10 
+    UPD_WINDOW = 10
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    fig, axes = plt.subplots(3, 3, figsize=(15, 11))
     fig.suptitle("CTM PPO — Minesweeper Training", fontsize=14, fontweight='bold')
 
     if episode_returns:
@@ -157,10 +157,29 @@ def plot_results(episode_returns, episode_wins, update_logs, save_dir="./plots")
         ax.set_ylabel("Entropy")
         ax.set_title("Policy Entropy")
         ax.grid(True, alpha=0.3)
+
+        # Mean Episode Reward
+        if 'mean_ep_reward' in update_logs[0]:
+            mean_ep_rews = np.array([u['mean_ep_reward'] for u in update_logs])
+            mean_epr, _ = rolling(mean_ep_rews, UPD_WINDOW)
+
+            ax = axes[2, 0]
+            ax.plot(upd_steps, mean_epr, color='darkgoldenrod', linewidth=1.5)
+            ax.set_xlabel("Environment Steps")
+            ax.set_ylabel("Mean Episode Reward")
+            ax.set_title("Mean Episode Reward (rolling 100 episodes)")
+            ax.grid(True, alpha=0.3)
+        else:
+            axes[2, 0].text(0.5, 0.5, "No mean reward data", ha='center', va='center',
+                           transform=axes[2, 0].transAxes)
     else:
         for ax in axes[0, 2], axes[1, 0], axes[1, 1], axes[1, 2]:
             ax.text(0.5, 0.5, "No update data", ha='center', va='center',
                     transform=ax.transAxes)
+
+    # Hide unused subplots
+    for ax in [axes[2, 1], axes[2, 2]]:
+        ax.axis('off')
 
     plt.tight_layout()
     png_path = os.path.join(save_dir, "training_curves.png")
@@ -172,9 +191,8 @@ def plot_results(episode_returns, episode_wins, update_logs, save_dir="./plots")
 
 
 def train():
-    # Configure device
-    device_config = -1
-    if device_config != -1:
+    device_config = 0
+    if torch.cuda.is_available() and device_config is not None and device_config >= 0:
         device = f'cuda:{device_config}'
     elif torch.backends.mps.is_available():
         device = 'mps'
@@ -404,17 +422,24 @@ def train():
         with torch.no_grad():
             ev = 1.0 - (b_returns - b_values).var() / (b_returns.var() + 1e-8)
 
+        # Compute mean episode reward from recent 100 episodes
+        mean_ep_reward = 0.0
+        if len(episode_returns) > 0:
+            recent_rewards = [r[1] for r in episode_returns[-100:]]
+            mean_ep_reward = np.mean(recent_rewards)
+
         update_logs.append({
             'step': global_step,
             'pg_loss': float(np.mean(mb_pg_losses)),
             'v_loss': float(np.mean(mb_v_losses)),
             'entropy': float(np.mean(mb_entropies)),
             'explained_variance': float(ev.item()),
+            'mean_ep_reward': float(mean_ep_reward),
         })
 
         sps = int(global_step / (time.time() - start_time))
         print(f"Update {update}/{num_updates}, Step {global_step}, Loss: {loss.item():.4f}, "
-              f"EV: {ev.item():.3f}, SPS: {sps}, Wins: {total_wins}")
+              f"EV: {ev.item():.3f}, SPS: {sps}, Wins: {total_wins}, Mean Ep Reward: {mean_ep_reward:.3f}")
 
         # Periodic checkpoint saving
         if save_interval > 0 and update % save_interval == 0:
