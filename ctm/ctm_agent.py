@@ -82,14 +82,18 @@ class CTMAgent(nn.Module):
         hidden, _, _ = self.get_states(x, ctm_state, done)
         return self.critic(hidden)
     
-    def get_action_and_value(self, x, ctm_state, done, action=None, track=False):
+    def get_action_and_value(self, x, ctm_state, done, action=None, track=False, action_mask=None):
         hidden, ctm_state, tracking_data = self.get_states(x, ctm_state, done, track=track)
         action_logits = self.actor(hidden)
+
+        if action_mask is not None:
+            action_logits = torch.where(action_mask, action_logits, torch.tensor(-1e8, device=action_logits.device))
+
         action_probs = Categorical(logits=action_logits)
 
         if action is None:
             action = action_probs.sample()
-        
+
         value = self.critic(hidden)
-        
+
         return action, action_probs.log_prob(action), action_probs.entropy(), value, ctm_state, tracking_data, action_logits, action_probs.probs

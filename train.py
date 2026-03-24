@@ -50,7 +50,7 @@ def load_model(agent, minesweeper_enc, optimizer, checkpoint_path, device):
     return global_step, update, total_wins, episode_returns, episode_wins, update_logs
 
 
-def plot_results(episode_returns, episode_wins, update_logs, save_dir="./plots"):
+def plot_results(episode_returns, episode_wins, update_logs, save_dir="./plots/minesweeper"):
     """Generate publication-quality training curves and save to save_dir."""
     os.makedirs(save_dir, exist_ok=True)
 
@@ -297,8 +297,12 @@ def train():
             raw_obs[step] = raw_next_obs
             dones[step] = next_done
 
+            action_mask = (raw_next_obs[:, 0, :, :].reshape(num_envs, -1) == -0.125).to(device)
+
             with torch.no_grad():
-                action, logprob, _, value, next_state, _, _, _ = agent.get_action_and_value(next_obs, next_state, next_done)
+                action, logprob, _, value, next_state, _, _, _ = agent.get_action_and_value(
+                    next_obs, next_state, next_done, action_mask=action_mask
+                )
                 values[step] = value.flatten()
 
             actions[step] = action
@@ -378,11 +382,14 @@ def train():
 
                 mb_obs = minesweeper_enc(b_raw_obs[mb_inds])
 
+                mb_action_mask = (b_raw_obs[mb_inds][:, 0, :, :].reshape(-1, height * width) == -0.125).to(device)
+
                 _, newlogprob, entropy, newvalue, _, _, _, _ = agent.get_action_and_value(
                     mb_obs,
                     selected_hidden_state,
                     b_dones[mb_inds],
                     b_actions.long()[mb_inds],
+                    action_mask=mb_action_mask,
                 )
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
