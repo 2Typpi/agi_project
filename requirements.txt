@@ -1,13 +1,11 @@
 torch
 numpy
 
-# Environment-specific dependencies
-#pybullet              # For BlocksWorld
-matplotlib            # For ShapeEnv
-shapely               # For ShapeEnv
-geopandas             # For ShapeEnv
 # Notebooks
 jupyterlab
 
 huggingface_hub
 safetensors
+torch 
+pandas 
+ipython

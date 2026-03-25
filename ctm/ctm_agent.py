@@ -1,23 +1,28 @@
 import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
+from torch.distributions import Bernoulli
 
 from ctm.action_head import UniversalActionHead
+from ctm.bernoulli_action_head import BernoulliActionHead
 from ctm.critic_head import UniversalCriticHead
 
 class CTMAgent(nn.Module):
-    def __init__(self, ctm, continuous_state_trace, device, num_actions):
+    def __init__(self, ctm, continuous_state_trace, device, num_actions, action_type='categorical'):
         super().__init__()
 
         self.continious_state_trace = continuous_state_trace
         self.device = device
-
+        self.action_type = action_type
 
         self.ctm = ctm
         actor_input_dim = critic_input_dim = self.ctm.synch_representation_size_out
         print(actor_input_dim, critic_input_dim)
 
-        self.actor = UniversalActionHead(latent_dim=actor_input_dim, num_actions=num_actions)
+        if action_type == 'bernoulli':
+            self.actor = BernoulliActionHead(latent_dim=actor_input_dim, num_actions=num_actions)
+        else:
+            self.actor = UniversalActionHead(latent_dim=actor_input_dim, num_actions=num_actions)
         self.critic = UniversalCriticHead(latent_dim=critic_input_dim)
 
 
@@ -86,10 +91,23 @@ class CTMAgent(nn.Module):
         hidden, ctm_state, tracking_data = self.get_states(x, ctm_state, done, track=track)
         action_logits = self.actor(hidden)
 
-        if action_mask is not None:
-            action_logits = torch.where(action_mask, action_logits, torch.tensor(-1e8, device=action_logits.device))
+        if self.action_type == 'bernoulli':
+            action_probs = Bernoulli(logits=action_logits)
 
-        action_probs = Categorical(logits=action_logits)
+            if action is None:
+                action = action_probs.sample()
+
+            value = self.critic(hidden)
+
+            # Sum log_prob and entropy over action dimension for multi-binary actions
+            logprob = action_probs.log_prob(action).sum(dim=-1)
+            entropy = action_probs.entropy().sum(dim=-1)
+
+            return action, logprob, entropy, value, ctm_state, tracking_data, action_logits, action_probs.probs
+        else:
+            if action_mask is not None:
+                action_logits = torch.where(action_mask, action_logits, torch.tensor(-1e8, device=action_logits.device))
+            action_probs = Categorical(logits=action_logits)
 
         if action is None:
             action = action_probs.sample()
