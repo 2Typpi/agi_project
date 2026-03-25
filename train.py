@@ -271,7 +271,7 @@ def train():
     for env in envs:
         env.reset()
     raw_next_obs = torch.stack([
-        torch.from_numpy(env.state_im.T).float() for env in envs
+        torch.from_numpy(env.state_im.transpose(2, 0, 1)).float() for env in envs
     ]).to(device)
     with torch.no_grad():
         next_obs = minesweeper_enc(raw_next_obs)
@@ -316,6 +316,8 @@ def train():
             for i, env in enumerate(envs):
                 next_obs_env_i, reward_i, done_i = env.step(int(action[i].item()))
                 ep_reward_buf[i] += reward_i
+                # if (i == 0): 
+                #     print(f"Take action {int(action[i].item())} for env {i} get reward {reward_i} and is_done? {done_i}")
 
                 if done_i:
                     is_win = reward_i > 0.5
@@ -327,7 +329,7 @@ def train():
                     env.reset()
                     next_obs_env_i = env.state_im
 
-                new_raw_obs_list.append(torch.from_numpy(next_obs_env_i.T).float())
+                new_raw_obs_list.append(torch.from_numpy(next_obs_env_i.transpose(2, 0, 1)).float())
                 new_rewards.append(reward_i)
                 new_dones.append(float(done_i))
 
