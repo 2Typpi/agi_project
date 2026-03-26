@@ -91,11 +91,9 @@ def compute_reward(prev_obs, next_obs, goal_slots, actions):
     for i in range(num_envs):
         goal_slot = goal_slots[i].item()
 
-        # Big reward for activating the goal slot
         if next_obs[i, goal_slot] > 0.5 and prev_obs[i, goal_slot] <= 0.5:
             rewards[i] = 1.0
         else:
-            # Sparse shaping: small reward for correct actions, small penalty for wrong actions
             correct_actions = goal_action_map.get(goal_slot, [])
 
             if correct_actions:
@@ -103,9 +101,8 @@ def compute_reward(prev_obs, next_obs, goal_slots, actions):
                 num_wrong_pressed = sum(1 for act_idx in range(actions.shape[1])
                                        if act_idx not in correct_actions and actions[i, act_idx] > 0.5)
 
-                # Net reward: encourage correct actions, discourage wrong ones
-                rewards[i] += 0.05 * num_correct_pressed  # Reward for pressing right buttons
-                rewards[i] -= 0.02 * num_wrong_pressed     # Penalty for pressing wrong buttons
+                rewards[i] += 0.05 * num_correct_pressed
+                rewards[i] -= 0.02 * num_wrong_pressed
 
     return rewards
 
@@ -278,13 +275,12 @@ def plot_goal_achievements(goal_history, slot_activation_history, save_dir="./pl
 
     # Plot 2: Success Rate Over Time (Rolling Window)
     ax = axes[0, 1]
-    window = min(100, len(achieved))  # Rolling window of 100 episodes (was 1000 steps)
+    window = min(100, len(achieved))
     if len(achieved) >= window:
         success_rate = np.convolve(achieved.astype(float), np.ones(window)/window, mode='valid')
         success_steps = steps[window-1:]
         ax.plot(success_steps, success_rate * 100, color='steelblue', linewidth=2)
     else:
-        # Cumulative success rate if not enough data
         cumsum = np.cumsum(achieved)
         cumcount = np.arange(1, len(achieved) + 1)
         ax.plot(steps, (cumsum / cumcount) * 100, color='steelblue', linewidth=2)
@@ -301,8 +297,8 @@ def plot_goal_achievements(goal_history, slot_activation_history, save_dir="./pl
     # Align goal_history and slot_activation_history by episode count
     # Both should have same length (one entry per episode)
     if len(goal_history) == len(slot_activation_history):
-        slot_when_goal = {i: [] for i in range(10)}  # activation when slot i IS the goal
-        slot_when_not_goal = {i: [] for i in range(10)}  # activation when slot i is NOT the goal
+        slot_when_goal = {i: [] for i in range(10)}
+        slot_when_not_goal = {i: [] for i in range(10)}
 
         for (_, goal_slot, _), (_, activated_slots) in zip(goal_history, slot_activation_history):
             for slot_idx in range(10):
@@ -312,7 +308,6 @@ def plot_goal_achievements(goal_history, slot_activation_history, save_dir="./pl
                 else:
                     slot_when_not_goal[slot_idx].append(was_activated)
 
-        # Calculate activation rates
         goal_rates = []
         non_goal_rates = []
         for slot_idx in range(10):
@@ -344,10 +339,9 @@ def plot_goal_achievements(goal_history, slot_activation_history, save_dir="./pl
         ax.grid(True, alpha=0.3, axis='y')
         ax.axhline(50, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
 
-        # Add gap values on top
         for i, (g_rate, ng_rate) in enumerate(zip(goal_rates, non_goal_rates)):
             gap = g_rate - ng_rate
-            if gap > 5:  # Only show significant gaps
+            if gap > 5:
                 ax.text(i, max(g_rate, ng_rate) + 3, f'+{gap:.0f}',
                        ha='center', va='bottom', fontsize=8, fontweight='bold', color='green')
     else:
@@ -410,7 +404,6 @@ def plot_goal_achievements(goal_history, slot_activation_history, save_dir="./pl
     # Plot 6: Learning Progress - Gap Over Time
     ax = axes[1, 2]
     if len(goal_history) == len(slot_activation_history) and len(goal_history) > 200:
-        # Calculate goal-directed gap over time (rolling window)
         window = min(100, len(goal_history) // 5)
         gaps_over_time = []
         steps_for_gaps = []
@@ -419,7 +412,6 @@ def plot_goal_achievements(goal_history, slot_activation_history, save_dir="./pl
             window_goal_history = goal_history[i-window:i]
             window_slot_history = slot_activation_history[i-window:i]
 
-            # Calculate average gap for this window
             window_gaps = []
             for (_, goal_slot, _), (_, activated_slots) in zip(window_goal_history, window_slot_history):
                 was_activated = goal_slot in activated_slots
@@ -553,7 +545,6 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots/newRun"):
     colors = plt.cm.tab10(np.linspace(0, 1, 10))
 
     for slot_idx in range(10):
-        # Find episodes where this slot was active
         active_episodes = np.where(activation_matrix[:, slot_idx] > 0)[0]
         if len(active_episodes) > 0:
             ax.scatter(all_steps[active_episodes],
@@ -571,7 +562,6 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots/newRun"):
     # Plot 2: Slot Frequency Heatmap
     ax = axes[1]
 
-    # Bin episodes into training windows
     num_windows = 10
     max_step = all_steps[-1] if len(all_steps) > 0 else 100000
     window_edges = np.linspace(0, max_step, num_windows + 1)
@@ -615,9 +605,8 @@ def plot_slot_discovery(slot_activation_history, save_dir="./plots/newRun"):
         print(f"{slot_labels[slot_idx]}: {activation_rate:5.1f}% {status}")
 
 def train():
-    # Configure device
-    device_config = -1
-    if device_config != -1:
+    device_config = 0
+    if torch.cuda.is_available() and device_config is not None and device_config >= 0:
         device = f'cuda:{device_config}'
     elif torch.backends.mps.is_available():
         device = 'mps'
@@ -625,7 +614,6 @@ def train():
         device = 'cpu'
     print(f'Running model CTM on {device}')
     torch.set_default_device(device)
-
     # --- Training Hyperparameters ---
     num_steps = 128
     num_envs = 16
@@ -765,7 +753,6 @@ def train():
             obs_buffer[step] = next_obs
             dones[step] = next_done
 
-            # Switch goal slots at regular intervals (cycling through available goals)
             if steps_since_goal_switch >= goal_switch_interval:
                 current_goal_slot_idx = (current_goal_slot_idx + 1) % len(available_goal_slots)
                 actual_goal_slot = available_goal_slots[current_goal_slot_idx]
@@ -774,7 +761,6 @@ def train():
                 print(f" -> Goal switched to slot {actual_goal_slot}")
             steps_since_goal_switch += 1
 
-            # Store previous observation for reward computation
             prev_obs = next_obs.clone()
 
             with torch.no_grad():
